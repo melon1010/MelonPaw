@@ -1,0 +1,6 @@
+﻿# Project exclude paths
+/melon-app/target/
+/melon-coding-mode/target/
+/melon-core/target/
+/melon-plugin-api/target/
+/melon-tools/target/
