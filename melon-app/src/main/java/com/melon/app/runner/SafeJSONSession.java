@@ -3,6 +3,7 @@
  */
 package com.melon.app.runner;
 
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
 import org.slf4j.Logger;
@@ -25,13 +26,10 @@ public class SafeJSONSession {
 
     private static final Logger log = LoggerFactory.getLogger(SafeJSONSession.class);
 
-    private static final String SESSIONS_DIR =
-            System.getProperty("user.home") + "/.melon/sessions";
-
     private final Path sessionsDir;
 
-    public SafeJSONSession() {
-        this.sessionsDir = Path.of(SESSIONS_DIR);
+    public SafeJSONSession(ConfigManager configManager) {
+        this.sessionsDir = configManager.resolveHomeDir().resolve("sessions");
     }
 
     // ======================== Public API ========================

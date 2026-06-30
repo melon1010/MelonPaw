@@ -35,7 +35,9 @@ public class ToolController {
         return Mono.fromCallable(() -> {
             ToolsConfig toolsConfig = configManager.getConfig()
                     .getAgents().get("default").getTools();
-            return ResponseEntity.ok(toolsConfig.getBuiltinTools());
+            return ResponseEntity.ok(toolsConfig.getBuiltinTools().entrySet().stream()
+                    .map(entry -> toolInfo(entry.getKey(), entry.getValue()))
+                    .toList());
         });
     }
 
@@ -73,5 +75,89 @@ public class ToolController {
                         .body(Map.of("error", e.getMessage()));
             }
         });
+    }
+
+    @PatchMapping("/{name}/toggle")
+    public Mono<ResponseEntity<?>> toggleToolCompat(
+            @PathVariable String name,
+            @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            ToolsConfig toolsConfig = configManager.getConfig()
+                    .getAgents().get("default").getTools();
+            BuiltinToolConfig tool = toolsConfig.getBuiltinTools().get(name);
+            if (tool == null) {
+                return ResponseEntity.notFound().build();
+            }
+            Object rawEnabled = body != null ? body.get("enabled") : null;
+            boolean enabled = rawEnabled instanceof Boolean b ? b : !tool.isEnabled();
+            tool.setEnabled(enabled);
+            configManager.save();
+            return ResponseEntity.ok(toolInfo(name, tool));
+        });
+    }
+
+    @PatchMapping("/{name}/async-execution")
+    public Mono<ResponseEntity<?>> updateAsyncExecution(
+            @PathVariable String name,
+            @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            ToolsConfig toolsConfig = configManager.getConfig()
+                    .getAgents().get("default").getTools();
+            BuiltinToolConfig tool = toolsConfig.getBuiltinTools().get(name);
+            if (tool == null) {
+                return ResponseEntity.notFound().build();
+            }
+            Object rawEnabled = body != null ? body.get("async_execution") : null;
+            if (rawEnabled == null && body != null) rawEnabled = body.get("enabled");
+            if (rawEnabled instanceof Boolean b) {
+                tool.setAsyncExecution(b);
+                configManager.save();
+            }
+            return ResponseEntity.ok(toolInfo(name, tool));
+        });
+    }
+
+    @GetMapping("/{name}/config")
+    public Mono<ResponseEntity<?>> getToolConfig(@PathVariable String name) {
+        return Mono.fromCallable(() -> {
+            ToolsConfig toolsConfig = configManager.getConfig()
+                    .getAgents().get("default").getTools();
+            BuiltinToolConfig tool = toolsConfig.getBuiltinTools().get(name);
+            if (tool == null) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(toolInfo(name, tool));
+        });
+    }
+
+    @PostMapping("/{name}/config")
+    public Mono<ResponseEntity<?>> updateToolConfig(@PathVariable String name, @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            ToolsConfig toolsConfig = configManager.getConfig()
+                    .getAgents().get("default").getTools();
+            BuiltinToolConfig tool = toolsConfig.getBuiltinTools().get(name);
+            if (tool == null) {
+                return ResponseEntity.notFound().build();
+            }
+            if (body != null) {
+                if (body.get("enabled") instanceof Boolean b) tool.setEnabled(b);
+                if (body.get("async_execution") instanceof Boolean b) tool.setAsyncExecution(b);
+                if (body.get("description") != null) tool.setDescription(String.valueOf(body.get("description")));
+                configManager.save();
+            }
+            return ResponseEntity.ok(Map.of("status", "ok", "message", "updated", "tool", toolInfo(name, tool)));
+        });
+    }
+
+    private Map<String, Object> toolInfo(String name, BuiltinToolConfig tool) {
+        return Map.of(
+                "name", name,
+                "display_name", name,
+                "description", tool.getDescription() != null ? tool.getDescription() : "",
+                "enabled", tool.isEnabled(),
+                "async_execution", tool.isAsyncExecution(),
+                "display_to_user", tool.isDisplayToUser(),
+                "icon", tool.getIcon() != null ? tool.getIcon() : ""
+        );
     }
 }

@@ -1,6 +1,47 @@
-﻿# Project exclude paths
-/melon-app/target/
-/melon-coding-mode/target/
-/melon-core/target/
-/melon-plugin-api/target/
-/melon-tools/target/
+# Maven / Java build output
+target/
+*/target/
+
+# IDE / editor metadata
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Logs and runtime files
+logs/
+*.log
+*.pid
+*.seed
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.vite/
+**/.vite/
+coverage/
+**/coverage/
+
+# Package-manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz

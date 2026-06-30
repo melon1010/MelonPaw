@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.event.AgentEvent;
 import io.agentscope.core.event.AgentEventType;
+import io.agentscope.core.event.CustomEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
@@ -47,6 +48,7 @@ public class SseEventMapper {
                     .event("reply_end")
                     .data("[DONE]")
                     .build();
+            case CUSTOM -> mapCustom((CustomEvent) event);
             default -> ServerSentEvent.<String>builder()
                     .event(event.getType().name().toLowerCase())
                     .data("")
@@ -70,5 +72,18 @@ public class SseEventMapper {
         } catch (JsonProcessingException ex) {
             return "{}";
         }
+    }
+
+    private ServerSentEvent<String> mapCustom(CustomEvent event) {
+        String data;
+        try {
+            data = objectMapper.writeValueAsString(event.getValue());
+        } catch (JsonProcessingException e) {
+            data = "{}";
+        }
+        return ServerSentEvent.<String>builder()
+                .event(event.getName())
+                .data(data)
+                .build();
     }
 }

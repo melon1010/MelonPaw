@@ -1,0 +1,174 @@
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 16px 24px;
+}
+
+.toolbar {
+  margin: 20px 0;
+}
+
+.loading {
+  text-align: center;
+  padding: 60px;
+  color: #999;
+}
+
+.summaryCards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.card {
+  flex: 1 1 140px;
+  min-width: 120px;
+  text-align: center;
+  padding: 16px;
+}
+
+.cardValue {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 4px;
+}
+
+.cardLabel {
+  font-size: 13px;
+  color: #999;
+}
+
+.tableCard {
+  margin-bottom: 24px;
+  border: none !important;
+
+  :global {
+    .qwenpaw-card-body {
+      padding: 16px;
+    }
+
+    .qwenpaw-spark-title {
+      font-size: 16px !important;
+      font-weight: 500 !important;
+      padding: 0 0 12px;
+    }
+  }
+}
+
+.chartCard {
+  margin-bottom: 24px;
+  border: none !important;
+
+  :global {
+    .qwenpaw-card-body {
+      padding: 16px;
+    }
+
+    .qwenpaw-spark-title {
+      font-size: 16px !important;
+      font-weight: 500 !important;
+      padding: 0 0 12px;
+    }
+  }
+}
+
+.trendRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+
+  @media (max-width: 768px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.chartTitle {
+  font-weight: 500;
+}
+
+/* ─── Empty state ──────────────────────────────────────────────────────────── */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  color: #bbb;
+  font-size: 14px;
+}
+
+.emptyIcon {
+  font-size: 32px;
+  opacity: 0.6;
+}
+
+/* ─── Dark mode ─────────────────────────────────────────────────────────────── */
+:global(.dark-mode) {
+  .loading {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .cardValue {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .cardLabel {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .emptyState {
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .tableCard {
+    :global {
+      .qwenpaw-card-body {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .qwenpaw-spark-title {
+        color: rgba(255, 255, 255, 0.85);
+      }
+    }
+  }
+
+  .chartCard {
+    :global {
+      .qwenpaw-card-body {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .qwenpaw-spark-title {
+        color: rgba(255, 255, 255, 0.85);
+      }
+    }
+  }
+
+  // Chart legend text color in dark mode
+  :global {
+    .g2-legend-item-name {
+      fill: rgba(255, 255, 255, 0.85) !important;
+    }
+
+    // Chart axis labels
+    .g2-axis-label-text {
+      fill: rgba(255, 255, 255, 0.65) !important;
+    }
+
+    // Pie chart labels
+    .g2-label-text {
+      fill: rgba(255, 255, 255, 0.65) !important;
+    }
+
+    // Tooltip text
+    .g2-tooltip-title,
+    .g2-tooltip-name,
+    .g2-tooltip-value {
+      color: rgba(255, 255, 255, 0.85) !important;
+    }
+  }
+}

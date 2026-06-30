@@ -1,0 +1,259 @@
+/* Chat page root layout */
+.chatPageRoot {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+}
+
+/* Main chat area (left of history panel) */
+.chatMainArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Chat messages scrollable area */
+.chatMessagesArea {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  :global {
+    [class*="chat-anywhere-default-header-right"] {
+      flex: 1;
+      display: flex;
+      align-items: center;
+    }
+  }
+
+  /* Wide mode: widen bubble list and sender while keeping spacing */
+  &.wideMode :global {
+    .qwenpaw-bubble-list {
+      max-width: none !important;
+    }
+
+    .qwenpaw-chat-anywhere-sender-wrapper {
+      max-width: none !important;
+    }
+  }
+
+  /* Custom scrollbar */
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  /* Dark mode scrollbar */
+  :global(.dark-mode) & {
+    &::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.3);
+      }
+    }
+  }
+
+  /* Firefox scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+
+  :global(.dark-mode) & {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+}
+
+/* Right-side history panel */
+.historyPanel {
+  width: 330px;
+  flex-shrink: 0;
+  align-self: stretch;
+  overflow: hidden;
+  position: relative;
+}
+
+@media (max-width: 900px) {
+  .historyPanel {
+    position: fixed;
+    top: 90px;
+    right: 0;
+    bottom: 0;
+    width: min(330px, 85vw);
+    z-index: 1000;
+    box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
+    border-radius: 12px 0 0 12px;
+  }
+  .historyPanelMask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 999;
+  }
+}
+
+.suggestionLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  width: min(520px, calc(100vw - 48px));
+  max-width: 100%;
+  line-height: 1.4;
+}
+
+.suggestionLabelCompact {
+  width: auto;
+}
+
+.suggestionCommand {
+  flex: 0 0 88px;
+  min-width: 0;
+  color: #ff7f16;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestionLabelCompact .suggestionCommand {
+  flex-basis: auto;
+  max-width: min(320px, calc(100vw - 96px));
+}
+
+.suggestionDescription {
+  flex: 1;
+  min-width: 0;
+  color: rgba(0, 0, 0, 0.45);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+:global {
+  .qwenpaw-suggestion .qwenpaw-cascader-menu,
+  .qwenpaw-suggestion .ant-cascader-menu,
+  .ant-cascader-dropdown.qwenpaw-suggestion .qwenpaw-cascader-menu,
+  .ant-cascader-dropdown.qwenpaw-suggestion .ant-cascader-menu {
+    height: auto !important;
+    max-height: 210px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+}
+
+:global(.dark-mode) {
+  .suggestionCommand {
+    color: #ff7f16;
+  }
+
+  .suggestionDescription {
+    color: rgba(255, 255, 255, 0.65);
+  }
+}
+
+/* Prompt star icon - use theme color */
+:global {
+  .chat-anywhere-prompt-icon,
+  [class*="prompt-icon"],
+  [class*="PromptIcon"] {
+    color: #ff7f16 !important;
+  }
+}
+
+/* Message actions: hide by default on hover-capable devices, always visible on touch */
+@media (hover: hover) {
+  .chatMessagesArea :global {
+    [class*="bubble-footer"] {
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    [class*="bubble-end"]:hover [class*="bubble-footer"],
+    [class*="bubble-start"]:hover [class*="bubble-footer"],
+    [class*="bubble-footer"]:hover,
+    [class*="bubble-footer"]:focus-within {
+      opacity: 1;
+    }
+  }
+}
+
+/* Fix #4216: Preserve newlines in user message bubbles.
+ * The Raw text renderer (used when raw=true) renders \n as plain React
+ * children which HTML collapses into whitespace. pre-wrap keeps them. */
+.chatMessagesArea :global {
+  [class*="bubble-end"] [class*="markdown"],
+  [class*="bubble-user"] [class*="markdown"] {
+    white-space: pre-wrap;
+  }
+}
+
+/* Fix #5480: Assistant response markdown may temporarily fall back to the
+ * vendor Raw renderer while streaming. Raw renders newline-bearing text as
+ * normal div children, so wrap long lines on the host side.
+ */
+.chatMessagesArea :global {
+  [class*="bubble-start"] [class*="markdown"],
+  [class*="bubble-assistant"] [class*="markdown"] {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+}
+
+/* ---- Rate-limit guidance banner ---- */
+.rateLimitBanner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(250, 173, 20, 0.08);
+  border-top: 1px solid rgba(250, 173, 20, 0.2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.rateLimitText {
+  font-size: 13px;
+  color: #d48806;
+  flex: 1;
+  min-width: 120px;
+}
+
+.rateLimitActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+:global(.dark-mode) {
+  .rateLimitBanner {
+    background: rgba(250, 173, 20, 0.06);
+    border-top-color: rgba(250, 173, 20, 0.15);
+  }
+
+  .rateLimitText {
+    color: #ffc53d;
+  }
+}

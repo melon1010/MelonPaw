@@ -4,12 +4,17 @@
 package com.melon.core.provider;
 
 import com.melon.core.config.MelonConfig;
+import com.melon.core.util.JsonUtils;
 import io.agentscope.core.formatter.openai.DeepSeekFormatter;
+import io.agentscope.core.model.AnthropicChatModel;
+import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.core.model.GeminiChatModel;
 import io.agentscope.core.model.ModelRegistry;
 import io.agentscope.core.model.OpenAIChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -22,6 +27,7 @@ public class ProviderManager {
 
     /** Registered providers: providerId -> list of supported model names */
     private final Map<String, List<String>> providers = new LinkedHashMap<>();
+    private Path providerConfigFile;
 
     /** Environment variable names for API keys by provider */
     private static final Map<String, String> API_KEY_ENV_VARS = Map.ofEntries(
@@ -45,6 +51,7 @@ public class ProviderManager {
 
     public void init(MelonConfig config) {
         log.info("Initializing ProviderManager...");
+        this.providerConfigFile = resolveHomeDir(config).resolve("providers.json");
 
         // Register default providers
         for (Map.Entry<String, List<String>> entry : DEFAULT_MODELS.entrySet()) {
@@ -54,29 +61,7 @@ public class ProviderManager {
             log.info("Registered provider: {} with {} models", providerId, models.size());
         }
 
-        // AgentScope ModelRegistry auto-resolves "provider:model" format
-        // Auto-reads environment variables: DASHSCOPE_API_KEY / OPENAI_API_KEY etc.
-
-        // Register DeepSeek model factory (OpenAI-compatible API)
-        // AgentScope doesn't have a built-in deepseek provider, so we register one
-        // using OpenAIChatModel with DeepSeek's base URL and DeepSeekFormatter
-        String deepseekKey = System.getenv("DEEPSEEK_API_KEY");
-        if (deepseekKey != null && !deepseekKey.isBlank()) {
-            final String apiKey = deepseekKey;
-            ModelRegistry.registerFactory("deepseek:(.+)", modelId -> {
-                String modelName = modelId.split(":", 2)[1];
-                return OpenAIChatModel.builder()
-                    .apiKey(apiKey)
-                    .baseUrl("https://api.deepseek.com")
-                    .modelName(modelName)
-                    .formatter(new DeepSeekFormatter())
-                    .stream(true)
-                    .build();
-            });
-            log.info("Registered DeepSeek model factory with ModelRegistry (baseUrl=https://api.deepseek.com)");
-        } else {
-            log.warn("DEEPSEEK_API_KEY not set, DeepSeek models will not be available");
-        }
+        registerConfiguredModelFactories();
 
         log.info("ProviderManager initialized with {} providers (ModelRegistry auto-configures from env vars)",
                 providers.size());
@@ -132,7 +117,10 @@ public class ProviderManager {
             return false;
         }
 
-        String apiKey = System.getenv(envVar);
+        String apiKey = configuredApiKey(providerId);
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = System.getenv(envVar);
+        }
         boolean available = apiKey != null && !apiKey.isBlank();
         log.info("Provider {} connection test: {} (env var {} is {})",
                 providerId, available ? "PASS" : "FAIL", envVar, available ? "set" : "not set");
@@ -157,5 +145,92 @@ public class ProviderManager {
 
     public String resolveModel(String providerId, String model) {
         return providerId + ":" + model;
+    }
+
+    private void registerConfiguredModelFactories() {
+        ModelRegistry.registerFactory("dashscope:(.+)", modelId -> {
+            String modelName = modelId.substring("dashscope:".length());
+            return DashScopeChatModel.builder()
+                    .apiKey(requireApiKey("dashscope", "DASHSCOPE_API_KEY", modelId))
+                    .modelName(modelName)
+                    .stream(true)
+                    .build();
+        });
+        ModelRegistry.registerFactory("qwen.+", modelId -> DashScopeChatModel.builder()
+                .apiKey(requireApiKey("dashscope", "DASHSCOPE_API_KEY", modelId))
+                .modelName(modelId)
+                .stream(true)
+                .build());
+        ModelRegistry.registerFactory("openai:(.+)", modelId -> OpenAIChatModel.builder()
+                .apiKey(requireApiKey("openai", "OPENAI_API_KEY", modelId))
+                .baseUrl(configuredValue("openai", "base_url"))
+                .modelName(modelId.substring("openai:".length()))
+                .stream(true)
+                .build());
+        ModelRegistry.registerFactory("deepseek:(.+)", modelId -> OpenAIChatModel.builder()
+                .apiKey(requireApiKey("deepseek", "DEEPSEEK_API_KEY", modelId))
+                .baseUrl(valueOr(configuredValue("deepseek", "base_url"), "https://api.deepseek.com"))
+                .modelName(modelId.substring("deepseek:".length()))
+                .formatter(new DeepSeekFormatter())
+                .stream(true)
+                .build());
+        ModelRegistry.registerFactory("anthropic:(.+)", modelId -> AnthropicChatModel.builder()
+                .apiKey(requireApiKey("anthropic", "ANTHROPIC_API_KEY", modelId))
+                .modelName(modelId.substring("anthropic:".length()))
+                .stream(true)
+                .build());
+        ModelRegistry.registerFactory("gemini:(.+)", modelId -> GeminiChatModel.builder()
+                .apiKey(requireApiKey("gemini", "GEMINI_API_KEY", modelId))
+                .modelName(modelId.substring("gemini:".length()))
+                .streamEnabled(true)
+                .build());
+    }
+
+    private String requireApiKey(String providerId, String envKey, String modelId) {
+        String apiKey = configuredApiKey(providerId);
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = System.getenv(envKey);
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("Provider API key is not configured for model: " + modelId);
+        }
+        return apiKey;
+    }
+
+    private String configuredApiKey(String providerId) {
+        return configuredValue(providerId, "api_key");
+    }
+
+    private String configuredValue(String providerId, String key) {
+        Object raw = providerConfig(providerId).get(key);
+        return raw == null ? "" : String.valueOf(raw);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> providerConfig(String providerId) {
+        if (providerConfigFile == null) {
+            return Map.of();
+        }
+        Object raw = JsonUtils.loadAsMap(providerConfigFile).get(providerId);
+        if (raw instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, value) -> result.put(String.valueOf(key), value));
+            return result;
+        }
+        return Map.of();
+    }
+
+    private Path resolveHomeDir(MelonConfig config) {
+        String homeDir = config != null && config.getHomeDir() != null && !config.getHomeDir().isBlank()
+                ? config.getHomeDir()
+                : "~/.melon";
+        if (homeDir.startsWith("~")) {
+            homeDir = System.getProperty("user.home") + homeDir.substring(1);
+        }
+        return Path.of(homeDir).toAbsolutePath().normalize();
+    }
+
+    private String valueOr(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

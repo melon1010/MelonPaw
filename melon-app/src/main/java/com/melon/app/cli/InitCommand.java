@@ -103,19 +103,16 @@ public class InitCommand implements Callable<Integer> {
               host: 127.0.0.1
               port: 8088
 
+            home_dir: ~/.melon
+
             agents:
               default:
                 name: default
                 active_model: dashscope:qwen-plus
-                workspace_dir: .agentscope/workspace
                 system_prompt_files:
                   - AGENTS.md
                 skills: []
                 approval:
                   level: AUTO
-
-            state:
-              store: json_file
-              base_dir: ~/.melon/state
             """;
 }

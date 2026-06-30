@@ -25,13 +25,23 @@ public class ConfigManager {
     private static final String CONFIG_FILE = "config.yaml";
 
     private final ObjectMapper yamlMapper;
-    private final Path configPath;
+    private Path configPath;
     private MelonConfig config;
+    private String defaultHomeDir = "~/.melon";
 
     public ConfigManager() {
         this.yamlMapper = new ObjectMapper(new YAMLFactory());
         this.configPath = Path.of(System.getProperty("user.home"), CONFIG_DIR, CONFIG_FILE);
-        this.config = new MelonConfig();
+        this.config = mergeDefaults(new MelonConfig());
+    }
+
+    public void setConfigPath(Path configPath) {
+        this.configPath = configPath;
+    }
+
+    public void setHomeDir(String homeDir) {
+        this.defaultHomeDir = homeDir == null || homeDir.isBlank() ? "~/.melon" : homeDir;
+        config.setHomeDir(homeDir);
     }
 
     /**
@@ -45,11 +55,11 @@ public class ConfigManager {
                 log.info("Config loaded from {}", configPath);
             } catch (IOException e) {
                 log.error("Failed to load config, using defaults", e);
-                config = new MelonConfig();
+                config = mergeDefaults(new MelonConfig());
             }
         } else {
             log.info("Config file not found, creating with defaults at {}", configPath);
-            config = new MelonConfig();
+            config = mergeDefaults(new MelonConfig());
             save();
         }
         return config;
@@ -90,6 +100,9 @@ public class ConfigManager {
      * 确保新工具出现在配置中, 旧条目规范化.
      */
     private MelonConfig mergeDefaults(MelonConfig loaded) {
+        if (loaded.getHomeDir() == null || loaded.getHomeDir().isBlank()) {
+            loaded.setHomeDir(defaultHomeDir);
+        }
         if (loaded.getAgents() == null) {
             loaded.setAgents(Collections.singletonMap("default", new AgentConfig()));
         }
@@ -103,5 +116,57 @@ public class ConfigManager {
             if (ac.getApproval() == null) ac.setApproval(new AgentConfig.ApprovalConfig());
         }
         return loaded;
+    }
+
+    public Path resolveHomeDir() {
+        return expandPath(config.getHomeDir() == null || config.getHomeDir().isBlank()
+                ? "~/.melon"
+                : config.getHomeDir());
+    }
+
+    public Path resolveWorkspaceDir(String agentId) {
+        String id = agentId == null || agentId.isBlank() ? "default" : agentId;
+        AgentConfig agent = config.getAgents().get(id);
+        if (agent != null && agent.getWorkspaceDir() != null && !agent.getWorkspaceDir().isBlank()) {
+            return expandPath(agent.getWorkspaceDir());
+        }
+        if (config.getPaths() != null
+                && config.getPaths().getWorkspaceRoot() != null
+                && !config.getPaths().getWorkspaceRoot().isBlank()) {
+            return expandPath(config.getPaths().getWorkspaceRoot()).resolve(id).normalize();
+        }
+        return resolveHomeDir().resolve("workspaces").resolve(id).normalize();
+    }
+
+    public Path resolveSkillPoolDir() {
+        if (config.getPaths() != null
+                && config.getPaths().getSkillPoolDir() != null
+                && !config.getPaths().getSkillPoolDir().isBlank()) {
+            return expandPath(config.getPaths().getSkillPoolDir());
+        }
+        return resolveHomeDir().resolve("skill_pool").normalize();
+    }
+
+    public Path resolveStateDir() {
+        if (config.getState() != null
+                && config.getState().getBaseDir() != null
+                && !config.getState().getBaseDir().isBlank()) {
+            return expandPath(config.getState().getBaseDir());
+        }
+        return resolveHomeDir().resolve("state").normalize();
+    }
+
+    public String stateStoreType() {
+        return config.getState() == null || config.getState().getStore() == null || config.getState().getStore().isBlank()
+                ? "json_file"
+                : config.getState().getStore();
+    }
+
+    private Path expandPath(String path) {
+        String value = path;
+        if (value.startsWith("~")) {
+            value = System.getProperty("user.home") + value.substring(1);
+        }
+        return Path.of(value).toAbsolutePath().normalize();
     }
 }

@@ -38,6 +38,19 @@ public class EnvController {
         });
     }
 
+    @PutMapping
+    public Mono<ResponseEntity<?>> saveEnvs(@RequestBody Map<String, String> body) {
+        return Mono.fromCallable(() -> {
+            for (String key : envService.listEnvs().keySet()) {
+                envService.deleteEnv(key);
+            }
+            if (body != null) {
+                body.forEach(envService::setEnv);
+            }
+            return ResponseEntity.ok(envService.listEnvs());
+        });
+    }
+
     /**
      * 获取单个环境变量.
      */

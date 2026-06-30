@@ -7,6 +7,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 聊天规格数据模型. 对应 Python app/runner/models.py 的 ChatSpec.
@@ -39,6 +42,9 @@ public class ChatSpec {
 
     @JsonProperty("model")
     private String model;
+
+    @JsonProperty("messages")
+    private List<Map<String, Object>> messages = new ArrayList<>();
 
     public ChatSpec() {
     }
@@ -114,6 +120,15 @@ public class ChatSpec {
 
     public void setModel(String model) {
         this.model = model;
+    }
+
+    public List<Map<String, Object>> getMessages() {
+        if (messages == null) messages = new ArrayList<>();
+        return messages;
+    }
+
+    public void setMessages(List<Map<String, Object>> messages) {
+        this.messages = messages != null ? messages : new ArrayList<>();
     }
 
     /**

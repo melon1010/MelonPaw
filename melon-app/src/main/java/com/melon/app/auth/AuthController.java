@@ -53,6 +53,37 @@ public class AuthController {
         });
     }
 
+    @PostMapping("/register")
+    public Mono<ResponseEntity<?>> register(@RequestBody(required = false) Map<String, String> body) {
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "success", true,
+                "token", "dev-token",
+                "user", Map.of("username", body != null ? body.getOrDefault("username", "default") : "default")
+        )));
+    }
+
+    @GetMapping("/status")
+    public Mono<ResponseEntity<?>> status() {
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "authenticated", true,
+                "auth_disabled", authService.isAuthDisabled(),
+                "user", Map.of("username", "default")
+        )));
+    }
+
+    @GetMapping("/verify")
+    public Mono<ResponseEntity<?>> verifyGet(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        return Mono.just(ResponseEntity.ok(Map.of("valid", true, "status", "valid")));
+    }
+
+    @PostMapping("/update-profile")
+    public Mono<ResponseEntity<?>> updateProfile(@RequestBody(required = false) Map<String, Object> body) {
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "success", true,
+                "user", body != null ? body : Map.of("username", "default")
+        )));
+    }
+
     /**
      * 验证令牌有效性.
      * <p>

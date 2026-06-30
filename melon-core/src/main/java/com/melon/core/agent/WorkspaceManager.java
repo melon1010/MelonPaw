@@ -4,12 +4,16 @@
 package com.melon.core.agent;
 
 import com.melon.core.config.AgentConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.InputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 工作区管理器. 对应 Python app/workspace/workspace.py.
@@ -18,16 +22,27 @@ public class WorkspaceManager {
 
     private static final Logger log = LoggerFactory.getLogger(WorkspaceManager.class);
     private static final String DEFAULT_AGENTS_MD = "# Agent Instructions\n\nYou are a helpful assistant.\n";
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final List<String> WORKSPACE_MD_FILES = List.of(
+            "AGENTS.md", "BOOTSTRAP.md", "HEARTBEAT.md", "MEMORY.md", "PROFILE.md", "SOUL.md"
+    );
+    private static final List<String> WORKSPACE_DIRS = List.of(
+            "sessions", "memory", "skills", "active_skills", "customized_skills",
+            "agents", "browser", "jobs_history", "dialog", "tool_results", "uploads"
+    );
 
     /**
      * 解析工作区路径.
      */
     public Path resolveWorkspaceDir(AgentConfig config) {
-        String dir = config.getWorkspaceDir();
-        if (dir.startsWith("~")) {
-            dir = dir.replace("~", System.getProperty("user.home"));
+        String dir = config != null ? config.getWorkspaceDir() : null;
+        if (dir == null || dir.isBlank()) {
+            throw new IllegalArgumentException("workspace_dir is required");
         }
-        return Path.of(dir);
+        if (dir.startsWith("~")) {
+            dir = System.getProperty("user.home") + dir.substring(1);
+        }
+        return Path.of(dir).toAbsolutePath().normalize();
     }
 
     /**
@@ -37,7 +52,7 @@ public class WorkspaceManager {
      * @return 插件工作区路径
      */
     public Path resolveWorkspaceDir(String pluginId) {
-        String baseDir = System.getProperty("user.home") + "/.melon/workspace";
+        String baseDir = System.getProperty("user.home") + "/.melon/workspaces";
         return Path.of(baseDir).resolve("plugins").resolve(pluginId);
     }
 
@@ -47,16 +62,60 @@ public class WorkspaceManager {
     public void initWorkspace(Path dir) {
         try {
             Files.createDirectories(dir);
-            Path agentsMd = dir.resolve("AGENTS.md");
-            if (!Files.exists(agentsMd)) {
-                Files.writeString(agentsMd, DEFAULT_AGENTS_MD);
-                log.info("Created default AGENTS.md at {}", agentsMd);
+            for (String filename : WORKSPACE_MD_FILES) {
+                createMdIfMissing(dir, filename);
             }
-            Files.createDirectories(dir.resolve("agents"));
-            Files.createDirectories(dir.resolve("memory"));
-            Files.createDirectories(dir.resolve("skills"));
+            for (String dirname : WORKSPACE_DIRS) {
+                Files.createDirectories(dir.resolve(dirname));
+            }
+            Files.createDirectories(dir.resolve("browser").resolve("user_data"));
+            createJsonIfMissing(dir.resolve("chats.json"), Map.of("version", 1, "chats", List.of()));
+            createJsonIfMissing(dir.resolve("jobs.json"), Map.of("version", 1, "jobs", List.of()));
+            createJsonIfMissing(dir.resolve("agent.json"), Map.of("version", 1));
         } catch (IOException e) {
             log.error("Failed to init workspace at {}", dir, e);
         }
+    }
+
+    public void writeAgentJson(Path dir, String agentId, AgentConfig config) {
+        try {
+            Files.createDirectories(dir);
+            Map<String, Object> data = Map.of(
+                    "id", agentId,
+                    "name", config.getName() != null ? config.getName() : agentId,
+                    "workspace_dir", dir.toString(),
+                    "active_model", config.getActiveModel() != null ? config.getActiveModel() : "",
+                    "system_prompt_files", config.getSystemPromptFiles() != null ? config.getSystemPromptFiles() : List.of(),
+                    "tools", config.getTools() != null ? config.getTools() : Map.of()
+            );
+            JSON.writerWithDefaultPrettyPrinter().writeValue(dir.resolve("agent.json").toFile(), data);
+        } catch (IOException e) {
+            log.error("Failed to write agent.json at {}", dir, e);
+        }
+    }
+
+    private void createMdIfMissing(Path dir, String filename) throws IOException {
+        Path target = dir.resolve(filename);
+        if (Files.exists(target)) {
+            return;
+        }
+        try (InputStream in = WorkspaceManager.class.getClassLoader().getResourceAsStream("agents/" + filename)) {
+            if (in != null) {
+                Files.copy(in, target);
+            } else if ("AGENTS.md".equals(filename)) {
+                Files.writeString(target, DEFAULT_AGENTS_MD);
+            } else {
+                Files.writeString(target, "# " + filename + "\n");
+            }
+            log.info("Created workspace file {}", target);
+        }
+    }
+
+    private void createJsonIfMissing(Path path, Map<String, Object> value) throws IOException {
+        if (Files.exists(path)) {
+            return;
+        }
+        JSON.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), value);
+        log.info("Created workspace file {}", path);
     }
 }

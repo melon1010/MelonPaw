@@ -3,6 +3,7 @@
  */
 package com.melon.app.backup;
 
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,8 +41,8 @@ public class BackupManager {
     private final Path melonHome;
     private final Path defaultBackupDir;
 
-    public BackupManager() {
-        this.melonHome = Path.of(System.getProperty("user.home"), ".melon");
+    public BackupManager(ConfigManager configManager) {
+        this.melonHome = configManager.resolveHomeDir();
         this.defaultBackupDir = melonHome.resolve("backups");
         try {
             Files.createDirectories(defaultBackupDir);

@@ -3,6 +3,7 @@
  */
 package com.melon.app.controller;
 
+import com.melon.app.runner.AgentRunner;
 import com.melon.app.service.ApprovalService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,9 +21,11 @@ import java.util.Map;
 public class ApprovalController {
 
     private final ApprovalService approvalService;
+    private final AgentRunner agentRunner;
 
-    public ApprovalController(ApprovalService approvalService) {
+    public ApprovalController(ApprovalService approvalService, AgentRunner agentRunner) {
         this.approvalService = approvalService;
+        this.agentRunner = agentRunner;
     }
 
     /**
@@ -46,11 +49,8 @@ public class ApprovalController {
     public Mono<ResponseEntity<?>> approve(
             @PathVariable String sessionId,
             @RequestBody(required = false) Map<String, Object> body) {
-        return Mono.fromCallable(() -> {
-            String modifiedCommand = body != null ? (String) body.get("modified_command") : null;
-            approvalService.approve(sessionId, modifiedCommand);
-            return ResponseEntity.ok(Map.of("status", "approved", "sessionId", sessionId));
-        });
+        return agentRunner.confirm("default", "default", sessionId, true)
+                .then(Mono.fromCallable(() -> ResponseEntity.ok(Map.of("status", "approved", "sessionId", sessionId))));
     }
 
     /**
@@ -60,11 +60,8 @@ public class ApprovalController {
     public Mono<ResponseEntity<?>> deny(
             @PathVariable String sessionId,
             @RequestBody(required = false) Map<String, String> body) {
-        return Mono.fromCallable(() -> {
-            String reason = body != null ? body.get("reason") : null;
-            approvalService.deny(sessionId, reason);
-            return ResponseEntity.ok(Map.of("status", "denied", "sessionId", sessionId));
-        });
+        return agentRunner.confirm("default", "default", sessionId, false)
+                .then(Mono.fromCallable(() -> ResponseEntity.ok(Map.of("status", "denied", "sessionId", sessionId))));
     }
 
     /**

@@ -27,21 +27,21 @@ public class MultiAgentManager {
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private final MelonAgentFactory agentFactory;
     private final ConfigManager configManager;
+    private final WorkspaceManager workspaceManager;
     private AgentStateStore stateStore;
 
-    public MultiAgentManager(ConfigManager configManager) {
+    public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager) {
         this.configManager = configManager;
         this.agentFactory = new MelonAgentFactory();
+        this.workspaceManager = workspaceManager;
     }
 
     /**
      * 初始化状态存储.
      */
     public void init() {
-        String storeType = configManager.getConfig().getState().getStore();
-        String baseDir = configManager.getConfig().getState().getBaseDir()
-                .replace("~", System.getProperty("user.home"));
-        Path statePath = Path.of(baseDir);
+        String storeType = configManager.stateStoreType();
+        Path statePath = configManager.resolveStateDir();
 
         if ("json_file".equals(storeType) || "json".equals(storeType)) {
             this.stateStore = new JsonFileAgentStateStore(statePath);
@@ -67,8 +67,10 @@ public class MultiAgentManager {
             if (config == null) {
                 throw new IllegalArgumentException("No agent config found for: " + id);
             }
-            Path workspaceDir = resolveWorkspaceDir(config);
-            return agentFactory.create(config, workspaceDir, stateStore);
+            Path workspaceDir = configManager.resolveWorkspaceDir(id);
+            workspaceManager.initWorkspace(workspaceDir);
+            workspaceManager.writeAgentJson(workspaceDir, id, config);
+            return agentFactory.create(id, config, workspaceDir, stateStore);
         });
     }
 
@@ -164,16 +166,5 @@ public class MultiAgentManager {
             stop(agentId);
         }
         log.info("All agents stopped");
-    }
-
-    private Path resolveWorkspaceDir(AgentConfig config) {
-        String dir = config.getWorkspaceDir();
-        if (dir == null || dir.isBlank()) {
-            dir = System.getProperty("user.home") + "/.melon/workspace";
-        }
-        if (dir.startsWith("~")) {
-            dir = dir.replace("~", System.getProperty("user.home"));
-        }
-        return Path.of(dir);
     }
 }

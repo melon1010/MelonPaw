@@ -3,6 +3,7 @@
  */
 package com.melon.app.controller;
 
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,8 +26,8 @@ public class CronController {
 
     private final Path cronsFile;
 
-    public CronController() {
-        this.cronsFile = Path.of(System.getProperty("user.home"), ".melon", "crons.json");
+    public CronController(ConfigManager configManager) {
+        this.cronsFile = configManager.resolveHomeDir().resolve("crons.json");
     }
 
     /**

@@ -6,10 +6,15 @@ package com.melon.core.agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.Model;
-import io.agentscope.core.tool.Toolkit;
+import io.agentscope.core.permission.PermissionBehavior;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.permission.PermissionMode;
+import io.agentscope.core.permission.PermissionRule;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import io.agentscope.harness.agent.memory.MemoryConfig;
+import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
+import io.agentscope.harness.agent.tool.SkillManageConfig;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import com.melon.core.config.AgentConfig;
@@ -34,7 +39,7 @@ public class MelonAgentFactory {
     /**
      * 构建一个配置完整的 HarnessAgent 实例.
      */
-    public HarnessAgent create(AgentConfig agentConfig, Path workspaceDir,
+    public HarnessAgent create(String agentId, AgentConfig agentConfig, Path workspaceDir,
                                 AgentStateStore stateStore) {
         log.info("Building HarnessAgent: name={}, model={}, workspace={}",
                 agentConfig.getName(), agentConfig.getActiveModel(), workspaceDir);
@@ -51,16 +56,28 @@ public class MelonAgentFactory {
         // 4. 构建 HarnessAgent
         HarnessAgent.Builder builder = HarnessAgent.builder()
                 .name(agentConfig.getName())
+                .agentId(agentId)
                 .model(agentConfig.getActiveModel())
                 .workspace(workspaceDir)
+                .filesystem(new LocalFilesystemSpec()
+                        .project(Path.of(System.getProperty("user.dir")))
+                        .projectWritable(false)
+                        .inheritEnv(true)
+                        .executeTimeoutSeconds(shellTimeoutSeconds(agentConfig)))
                 .middlewares(middlewares)
                 .compaction(compaction)
                 .memory(memoryConfig)
                 .stateStore(stateStore)
                 .maxIters(agentConfig.getRunning().getMaxIters())
                 .maxRetries(agentConfig.getRunning().getLlmMaxRetries())
+                .permissionContext(buildPermissionContext(agentConfig))
                 .enableMetaTool(true)
+                .enableSkillManageTool(SkillManageConfig.defaults())
                 .enableTaskList(agentConfig.getRunning().isTaskListEnabled());
+
+        if (agentConfig.getPlanMode().isEnabled()) {
+            builder.enablePlanMode(true);
+        }
 
         if (agentConfig.getRunning().getFallbackModel() != null) {
             builder.fallbackModel(agentConfig.getRunning().getFallbackModel());
@@ -84,23 +101,37 @@ public class MelonAgentFactory {
         // 3. 自动续推中间件 (对应 _auto_continue_if_text_only)
         list.add(new AutoContinueMiddleware());
 
-        // 4. Plan 门控中间件 (对应 _acting 中的 Plan 门控)
-        if (config.getPlanMode().isEnabled()) {
-            list.add(new PlanGateMiddleware());
-        }
-
-        // 5. Coding Mode 中间件
+        // 4. Coding Mode 中间件
         if (config.getCodingMode().isEnabled()) {
             list.add(new CodingModeMiddleware(config.getCodingMode()));
         }
 
-        // 6. Token 记录中间件 (对应 TokenRecordingModelWrapper)
+        // 5. Token 记录中间件 (对应 TokenRecordingModelWrapper)
         list.add(new TokenRecordingMiddleware());
 
-        // 7. 记忆被动注入中间件 (对应 pre_reply hook)
+        // 6. 记忆被动注入中间件 (对应 pre_reply hook)
         list.add(new MemoryInjectionMiddleware());
 
         return list;
+    }
+
+    private PermissionContextState buildPermissionContext(AgentConfig config) {
+        String level = config.getApproval() != null ? config.getApproval().getLevel() : "AUTO";
+        if ("OFF".equalsIgnoreCase(level) || "AUTO".equalsIgnoreCase(level)) {
+            return PermissionContextState.builder().mode(PermissionMode.BYPASS).build();
+        }
+        PermissionContextState.Builder builder = PermissionContextState.builder().mode(PermissionMode.DEFAULT);
+        for (String tool : approvalTools("STRICT".equalsIgnoreCase(level))) {
+            builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "qwenpaw-java"));
+        }
+        return builder.build();
+    }
+
+    private List<String> approvalTools(boolean strict) {
+        if (strict) {
+            return List.of("execute", "write_file", "edit_file", "read_file", "grep_files", "glob_files", "list_files");
+        }
+        return List.of("execute", "write_file", "edit_file");
     }
 
     /**
@@ -141,4 +172,10 @@ public class MelonAgentFactory {
                 .sessionRetentionDays(180)
                 .build();
     }
+
+    private int shellTimeoutSeconds(AgentConfig config) {
+        int seconds = (int) Math.ceil(config.getRunning().getShellCommandTimeout());
+        return Math.max(1, seconds);
+    }
+
 }

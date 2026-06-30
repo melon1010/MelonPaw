@@ -3,11 +3,11 @@
  */
 package com.melon.app.config;
 
+import com.melon.core.config.ConfigManager;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,19 +23,20 @@ public class StateStoreConfig {
 
     private static final Logger log = LoggerFactory.getLogger(StateStoreConfig.class);
 
-    @Value("${melon.state.store-type:json}")
-    private String storeType;
+    private final ConfigManager configManager;
 
-    @Value("${melon.state.base-dir:${user.home}/.melon/state}")
-    private String baseDir;
+    public StateStoreConfig(ConfigManager configManager) {
+        this.configManager = configManager;
+    }
 
     @Bean
     public AgentStateStore agentStateStore() {
-        Path stateDir = Path.of(baseDir);
+        String storeType = configManager.stateStoreType();
+        Path stateDir = configManager.resolveStateDir();
         log.info("Initializing state store: type={}, dir={}", storeType, stateDir);
 
         return switch (storeType.toLowerCase()) {
-            case "json" -> new JsonFileAgentStateStore(stateDir);
+            case "json", "json_file" -> new JsonFileAgentStateStore(stateDir);
             // case "redis" -> new RedisAgentStateStore(...);  // Future
             // case "mysql" -> new MysqlAgentStateStore(...);   // Future
             default -> {

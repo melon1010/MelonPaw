@@ -12,14 +12,11 @@ melon:
   server:
     host: 127.0.0.1
     port: 8088
-  state:
-    store: json_file
-    base_dir: ~/.melon/state
+  home_dir: ~/.melonAI
   agents:
     default:
       name: default
       active_model: deepseek:deepseek-v4-flash
-      workspace_dir: .agentscope/workspace
       system_prompt_files:
         - AGENTS.md
         - SOUL.md

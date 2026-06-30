@@ -5,9 +5,13 @@ package com.melon.app.runner;
 
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.ConfirmResult;
+import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.harness.agent.HarnessAgent;
 import com.melon.core.agent.MultiAgentManager;
+import com.melon.app.service.ApprovalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +34,9 @@ public class AgentRunner {
     @Autowired
     private MultiAgentManager multiAgentManager;
 
+    @Autowired
+    private ApprovalService approvalService;
+
     /**
      * 流式查询. 对应 Python _stream_printing_messages_interruptible.
      */
@@ -42,7 +49,9 @@ public class AgentRunner {
 
         RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
 
-        return agent.streamEvents(msgs, ctx);
+        return agent.streamEvents(msgs, ctx)
+                .doOnNext(event -> captureApproval(agentId, sessionId, event))
+                .doOnError(e -> log.error("Agent stream failed: agent={}, user={}, session={}", agentId, userId, sessionId, e));
     }
 
     /**
@@ -60,12 +69,28 @@ public class AgentRunner {
         return agent.call(msgs, ctx);
     }
 
+    public Mono<Msg> confirm(String agentId, String userId, String sessionId, boolean approved) {
+        HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+        ToolUseBlock toolCall = approvalService.removePendingToolCall(sessionId);
+        if (toolCall == null) {
+            return Mono.empty();
+        }
+        Msg confirm = io.agentscope.core.message.UserMessage.builder()
+                .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(approved, toolCall))))
+                .build();
+        RuntimeContext ctx = buildContext(userId, sessionId, Map.of("agent_id", agentId, "source", "console"));
+        return agent.call(List.of(confirm), ctx);
+    }
+
     private RuntimeContext buildContext(String userId, String sessionId, Map<String, Object> envInfo) {
         RuntimeContext.Builder builder = RuntimeContext.builder()
                 .userId(userId != null ? userId : "default")
                 .sessionId(sessionId != null ? sessionId : "default");
 
         if (envInfo != null) {
+            if (envInfo.get("agent_id") != null) {
+                builder.put("agent_id", envInfo.get("agent_id"));
+            }
             if (envInfo.get("working_dir") != null) {
                 builder.put("working_dir", envInfo.get("working_dir"));
             }
@@ -78,8 +103,48 @@ public class AgentRunner {
             if (envInfo.get("project_dir") != null) {
                 builder.put("project_dir", envInfo.get("project_dir"));
             }
+            if (envInfo.get("source") != null) {
+                builder.put("source", envInfo.get("source"));
+            }
         }
 
         return builder.build();
     }
+
+    private void captureApproval(String agentId, String sessionId, AgentEvent event) {
+        if (event instanceof RequireUserConfirmEvent confirm) {
+            String sid = sessionId != null ? sessionId : "default";
+            for (ToolUseBlock toolCall : confirm.getToolCalls()) {
+                approvalService.setPendingApproval(sid, toolCall, normalizeApproval(agentId, sid, toolCall));
+            }
+        }
+    }
+
+    private Map<String, Object> normalizeApproval(String agentId, String sessionId, ToolUseBlock toolCall) {
+        String sid = sessionId != null ? sessionId : "default";
+        String aid = stringValue(agentId, "default");
+        Map<String, Object> approval = new java.util.LinkedHashMap<>();
+        approval.put("request_id", toolCall.getId());
+        approval.put("session_id", sid);
+        approval.put("root_session_id", sid);
+        approval.put("agent_id", aid);
+        approval.put("owner_agent_id", aid);
+        approval.put("tool_name", toolCall.getName());
+        approval.put("tool_display_name", toolCall.getName());
+        approval.put("tool_source", "agentscope");
+        approval.put("severity", "medium");
+        approval.put("findings_count", 1);
+        approval.put("findings_summary", "AgentScope requires approval before running this tool.");
+        approval.put("tool_params", toolCall.getInput());
+        approval.put("created_at", System.currentTimeMillis() / 1000.0);
+        approval.put("timeout_seconds", 300);
+        return approval;
+    }
+
+    private String stringValue(Object value, String fallback) {
+        if (value == null) return fallback;
+        String text = String.valueOf(value);
+        return text.isBlank() ? fallback : text;
+    }
+
 }

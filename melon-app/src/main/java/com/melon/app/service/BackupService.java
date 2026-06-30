@@ -3,6 +3,7 @@
  */
 package com.melon.app.service;
 
+import com.melon.core.config.ConfigManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,8 +30,8 @@ public class BackupService {
     private final Path backupDir;
     private final Path melonHome;
 
-    public BackupService() {
-        this.melonHome = Path.of(System.getProperty("user.home"), ".melon");
+    public BackupService(ConfigManager configManager) {
+        this.melonHome = configManager.resolveHomeDir();
         this.backupDir = melonHome.resolve("backups");
         try {
             Files.createDirectories(backupDir);

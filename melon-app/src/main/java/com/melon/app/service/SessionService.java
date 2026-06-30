@@ -4,6 +4,7 @@
 package com.melon.app.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.melon.core.config.ConfigManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,8 +29,8 @@ public class SessionService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Path sessionsDir;
 
-    public SessionService() {
-        this.sessionsDir = Path.of(System.getProperty("user.home"), ".melon", "sessions");
+    public SessionService(ConfigManager configManager) {
+        this.sessionsDir = configManager.resolveHomeDir().resolve("sessions");
         try {
             Files.createDirectories(sessionsDir);
         } catch (Exception e) {

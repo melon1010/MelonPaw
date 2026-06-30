@@ -39,7 +39,7 @@ public class MaterializeSkillTool extends ToolBase {
                   "properties": {
                     "skill_name": {
                       "type": "string",
-                      "description": "Name of the skill to materialize (directory name under .melon/skills/)"
+                      "description": "Name of the skill to materialize (directory name under workspace skills/)"
                     },
                     "file_path": {
                       "type": "string",
@@ -70,8 +70,7 @@ public class MaterializeSkillTool extends ToolBase {
             return Mono.just(ToolResultBlock.error("skill_name is required"));
         }
 
-        // Skills are stored under ~/.melon/skills/{skill_name}/
-        Path skillsDir = workspaceDir.resolve(".melon").resolve("skills");
+        Path skillsDir = workspaceDir.resolve("skills");
         Path skillDir = skillsDir.resolve(skillName);
         Path targetFile = skillDir.resolve(filePath);
 

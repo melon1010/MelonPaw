@@ -4,7 +4,9 @@
 package com.melon.app.config;
 
 import com.melon.app.cron.CronManager;
+import com.melon.app.service.BuiltinSkillInitializer;
 import com.melon.core.agent.MultiAgentManager;
+import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.plugin.PluginManager;
 import com.melon.core.provider.ProviderManager;
@@ -16,7 +18,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Configuration;
 
 import jakarta.annotation.PreDestroy;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -39,6 +40,12 @@ public class LifecycleConfig implements ApplicationRunner {
     @Autowired
     private MultiAgentManager multiAgentManager;
 
+    @Autowired
+    private WorkspaceManager workspaceManager;
+
+    @Autowired
+    private BuiltinSkillInitializer builtinSkillInitializer;
+
     @Autowired(required = false)
     private PluginManager pluginManager;
 
@@ -53,23 +60,27 @@ public class LifecycleConfig implements ApplicationRunner {
 
         // Phase 1: 同步快速
         configManager.load();
+        builtinSkillInitializer.seedAllAgents();
+        initAgentWorkspaces();
         providerManager.init(configManager.getConfig());
         multiAgentManager.init();
-        log.info("Phase 1 complete: config, providers, state store initialized");
+        log.info("Phase 1 complete: config, providers, state store, builtin skills, workspaces initialized");
 
-        // Phase 2: 后台异步
-        CompletableFuture.runAsync(() -> {
-            try {
-                multiAgentManager.startAll();
-                log.info("Phase 2 complete: all agents started");
-            } finally {
-                initLatch.countDown();
-            }
-        });
+        // Agents are created lazily on first chat. Startup should not require model API keys.
+        initLatch.countDown();
+        log.info("Phase 2 skipped: agents will start lazily on demand");
 
         log.info("=== Melon ready on {}:{} ===",
                 configManager.getConfig().getServer().getHost(),
                 configManager.getConfig().getServer().getPort());
+    }
+
+    private void initAgentWorkspaces() {
+        configManager.getConfig().getAgents().forEach((agentId, agentConfig) -> {
+            var workspaceDir = configManager.resolveWorkspaceDir(agentId);
+            workspaceManager.initWorkspace(workspaceDir);
+            workspaceManager.writeAgentJson(workspaceDir, agentId, agentConfig);
+        });
     }
 
     @PreDestroy

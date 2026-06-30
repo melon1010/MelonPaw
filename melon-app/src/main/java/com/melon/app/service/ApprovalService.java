@@ -5,12 +5,12 @@ package com.melon.app.service;
 
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
+import io.agentscope.core.message.ToolUseBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -27,12 +27,9 @@ public class ApprovalService {
 
     // sessionId -> pending approval request data
     private final ConcurrentHashMap<String, Map<String, Object>> pendingApprovals = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ToolUseBlock> pendingToolCalls = new ConcurrentHashMap<>();
     // sessionId -> pending plan data
     private final ConcurrentHashMap<String, Map<String, Object>> pendingPlans = new ConcurrentHashMap<>();
-    // sessionId -> pending approval future (true=approved, false=denied)
-    private final ConcurrentHashMap<String, CompletableFuture<Boolean>> pendingApprovalFutures = new ConcurrentHashMap<>();
-    // sessionId -> pending plan future (true=confirmed, false=rejected)
-    private final ConcurrentHashMap<String, CompletableFuture<Boolean>> pendingPlanFutures = new ConcurrentHashMap<>();
 
     public ApprovalService(ConfigManager configManager) {
         this.configManager = configManager;
@@ -73,47 +70,18 @@ public class ApprovalService {
         return pendingApprovals.get(sessionId);
     }
 
-    /**
-     * Sets a pending approval request for a session.
-     * Also creates a CompletableFuture that the agent thread can wait on.
-     */
-    public void setPendingApproval(String sessionId, Map<String, Object> approvalRequest) {
+    public List<Map<String, Object>> getPendingApprovals() {
+        return new ArrayList<>(pendingApprovals.values());
+    }
+
+    public void setPendingApproval(String sessionId, ToolUseBlock toolCall, Map<String, Object> approvalRequest) {
         pendingApprovals.put(sessionId, approvalRequest);
-        pendingApprovalFutures.computeIfAbsent(sessionId, k -> new CompletableFuture<>());
+        pendingToolCalls.put(sessionId, toolCall);
     }
 
-    /**
-     * Returns the CompletableFuture for a pending approval.
-     * The agent thread can call .get() or .join() on this to block until approval/denial.
-     */
-    public CompletableFuture<Boolean> waitForApproval(String sessionId) {
-        return pendingApprovalFutures.computeIfAbsent(sessionId, k -> new CompletableFuture<>());
-    }
-
-    /**
-     * Approves a pending tool call.
-     * Completes the pending future with true to unblock the agent thread.
-     */
-    public void approve(String sessionId, String modifiedCommand) {
+    public ToolUseBlock removePendingToolCall(String sessionId) {
         pendingApprovals.remove(sessionId);
-        CompletableFuture<Boolean> future = pendingApprovalFutures.remove(sessionId);
-        if (future != null) {
-            future.complete(true);
-        }
-        log.info("Approval granted for session: {}", sessionId);
-    }
-
-    /**
-     * Denies a pending tool call.
-     * Completes the pending future with false to unblock the agent thread.
-     */
-    public void deny(String sessionId, String reason) {
-        pendingApprovals.remove(sessionId);
-        CompletableFuture<Boolean> future = pendingApprovalFutures.remove(sessionId);
-        if (future != null) {
-            future.complete(false);
-        }
-        log.info("Approval denied for session: {} (reason: {})", sessionId, reason);
+        return pendingToolCalls.remove(sessionId);
     }
 
     /**
@@ -129,15 +97,6 @@ public class ApprovalService {
      */
     public void setPlan(String sessionId, Map<String, Object> plan) {
         pendingPlans.put(sessionId, plan);
-        pendingPlanFutures.computeIfAbsent(sessionId, k -> new CompletableFuture<>());
-    }
-
-    /**
-     * Returns the CompletableFuture for a pending plan confirmation.
-     * The agent thread can call .get() or .join() on this to block until confirm/reject.
-     */
-    public CompletableFuture<Boolean> waitForPlanConfirmation(String sessionId) {
-        return pendingPlanFutures.computeIfAbsent(sessionId, k -> new CompletableFuture<>());
     }
 
     /**
@@ -146,10 +105,6 @@ public class ApprovalService {
      */
     public void confirmPlan(String sessionId) {
         pendingPlans.remove(sessionId);
-        CompletableFuture<Boolean> future = pendingPlanFutures.remove(sessionId);
-        if (future != null) {
-            future.complete(true);
-        }
         log.info("Plan confirmed for session: {}", sessionId);
     }
 
@@ -159,10 +114,6 @@ public class ApprovalService {
      */
     public void rejectPlan(String sessionId, String reason) {
         pendingPlans.remove(sessionId);
-        CompletableFuture<Boolean> future = pendingPlanFutures.remove(sessionId);
-        if (future != null) {
-            future.complete(false);
-        }
         log.info("Plan rejected for session: {} (reason: {})", sessionId, reason);
     }
 }

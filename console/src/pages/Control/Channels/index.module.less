@@ -1,0 +1,650 @@
+.channelsPage {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.channelsContainer {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 24px;
+}
+
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  padding: 20px;
+  border-bottom: 1px solid #eae9e7;
+}
+
+.breadcrumbHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  flex: 1;
+}
+
+.breadcrumbParent {
+  color: #999;
+  font-weight: 400;
+}
+
+.breadcrumbSeparator {
+  color: #ccc;
+  margin: 0 4px;
+}
+
+.breadcrumbCurrent {
+  color: #333;
+  font-weight: 600;
+  font-size: 20px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+}
+
+.description {
+  color: #999;
+  font-size: 14px;
+  margin: 0;
+  display: none;
+}
+
+.filterTabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  align-self: center;
+}
+
+.filterTab {
+  padding: 5px 14px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.18s ease;
+
+  &:hover {
+    color: #333;
+    background: rgba(0, 0, 0, 0.04);
+  }
+}
+
+.filterTabActive {
+  background: #fff;
+  color: rgba(38, 36, 76, 0.88);
+  font-weight: 500;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.loading {
+  text-align: center;
+  padding: 60px;
+}
+
+.loadingText {
+  color: #999;
+}
+
+.channelsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(346px, 1fr));
+  gap: 16px;
+  padding: 16px 16px 32px;
+}
+
+/* ---- Panel Section Styles ---- */
+
+.panelSection {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px 16px 0;
+}
+
+.panelSectionDashed {
+  background: transparent;
+  border: 1px dashed rgba(0, 0, 0, 0.15);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px;
+}
+
+.panelTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.5);
+  margin-bottom: 16px;
+}
+
+.panelDotGreen {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.panelDotGray {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.panelCount {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.emptyConfigured {
+  text-align: center;
+  padding: 48px 24px;
+  color: rgba(0, 0, 0, 0.45);
+
+  p {
+    margin: 0 0 16px;
+    font-size: 14px;
+  }
+}
+
+/* ---- Available Grid Styles ---- */
+
+.availableGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.availableItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: rgba(0, 0, 0, 0.01);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.1);
+
+    .availableItemAction {
+      color: rgba(0, 0, 0, 0.88);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid #1677ff;
+    outline-offset: 1px;
+  }
+}
+
+.availableItemName {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.88);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.availableItemAction {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .channelsPage .pageHeader {
+    padding: 12px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  /* Cancel PageHeader's absolute centering so tabs/buttons stack normally.
+     PageHeader's inner center/extra classes are hashed, so we target by
+     substring to avoid the stale :global(.center) mismatch. */
+  .channelsPage .pageHeader > [class*="center"] {
+    position: static;
+    transform: none;
+    align-self: flex-start;
+  }
+
+  .channelsPage .pageHeader > [class*="extra"] {
+    align-self: flex-start;
+  }
+
+  .filterTabs {
+    align-self: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .filterTab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .channelsGrid {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .panelSection,
+  .panelSectionDashed {
+    margin: 12px;
+    padding: 12px;
+  }
+
+  .panelTitle {
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .availableGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .availableItem {
+    padding: 8px 12px;
+  }
+
+  .emptyConfigured {
+    padding: 32px 16px;
+  }
+}
+
+/* ---- Channel Card Styles ---- */
+
+.channelCard {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+  border-radius: var(--border-radius, 8px);
+  background: var(--color-bg-base, #ffffff);
+  border: 1px solid var(--color-border-secondary, #eae8e7);
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+
+  :global {
+    .qwenpaw-card-body {
+      padding: 0 !important;
+    }
+
+    .qwenpaw-spark-card-wrapper {
+      padding: 0 !important;
+    }
+  }
+
+  &.hover {
+    border-color: var(--color-border, #d9d9d9);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  }
+}
+
+/* Top section: Icon and Status */
+.cardTopSection {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.channelIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  color: #f07e26;
+  font-size: 24px;
+  flex-shrink: 0;
+
+  img {
+    border-radius: 10px;
+    object-fit: cover;
+  }
+}
+
+.statusIndicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.statusText {
+  font-family: Lato;
+  font-size: 12px;
+  font-weight: normal;
+  line-height: 19px;
+  letter-spacing: normal;
+
+  &.enabled {
+    color: rgba(20, 184, 166, 1);
+  }
+
+  &.disabled {
+    color: rgba(20, 20, 19, 0.45);
+  }
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &.enabled {
+    background-color: rgba(20, 184, 166, 1);
+  }
+
+  &.disabled {
+    background-color: #d9d9d9;
+  }
+}
+
+/* Middle section: Name and Tag */
+.cardMiddleSection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cardTitle {
+  color: rgba(20, 20, 19, 0.88);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: normal;
+  margin: 12px 0;
+}
+
+.builtinTag {
+  color: #8e8c99;
+  background: rgba(239, 240, 243, 0.8);
+  border-radius: 2px;
+  padding: 0px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: normal;
+  margin-left: 12px;
+}
+
+.customTag {
+  color: #8e8c99;
+  background: rgba(239, 240, 243, 0.8);
+  border-radius: 2px;
+  padding: 0px 4px;
+  font-size: 12px;
+  font-weight: normal;
+  line-height: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+/* Bottom section: Bot Prefix */
+.cardBottomSection {
+  margin-top: auto;
+  padding-bottom: 8px;
+}
+
+.cardDescription {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+
+.actionButton {
+  padding: 0;
+  height: auto;
+  font-size: 11px;
+}
+
+.cardHint {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.25);
+}
+
+/* ---- Channel Drawer Styles ---- */
+
+.drawerTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dingtalkDocBtn {
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.formTopActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.drawerHeaderActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ─── Dark mode ─────────────────────────────────────────────────────────────── */
+:global(.dark-mode) {
+  .pageHeader {
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .breadcrumbParent {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .breadcrumbSeparator {
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .breadcrumbCurrent {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .title {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .description {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .filterTabs {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .filterTab {
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.06);
+    }
+  }
+
+  .filterTabActive {
+    background: #2a2a2a;
+    color: #ff7f16;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  .loadingText {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  /* Card background and text */
+  .channelCard {
+    background: #2d2d2d;
+
+    &.normal {
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    &.hover {
+      border-color: rgba(255, 255, 255, 0.15);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+  }
+
+  .channelIcon {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.65);
+  }
+
+  .cardTitle {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .builtinTag,
+  .customTag {
+    color: rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .statusIndicator {
+    &.enabled {
+      color: rgba(20, 184, 166, 1);
+    }
+
+    &.disabled {
+      color: rgba(255, 255, 255, 0.65);
+    }
+  }
+
+  .statusText {
+    &.enabled {
+      color: rgba(20, 184, 166, 1);
+    }
+
+    &.disabled {
+      color: rgba(255, 255, 255, 0.65);
+    }
+  }
+
+  .statusDot.disabled {
+    background-color: rgba(255, 255, 255, 0.4);
+  }
+
+  .cardDescription {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .cardHint {
+    color: rgba(255, 255, 255, 0.25);
+  }
+
+  .drawerHeaderActions {
+    .cancelBtn {
+      color: rgba(255, 255, 255, 0.65);
+    }
+  }
+
+  .panelSection {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .panelSectionDashed {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .panelTitle {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .panelDotGreen {
+    background: #34d399;
+  }
+
+  .panelDotGray {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .panelCount {
+    color: #34d399;
+  }
+
+  .emptyConfigured {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .availableItem {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.08);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.15);
+
+      .availableItemAction {
+        color: rgba(255, 255, 255, 0.85);
+      }
+    }
+
+    &:focus-visible {
+      outline-color: #ff7f16;
+    }
+  }
+
+  .availableItemName {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .availableItemAction {
+    color: rgba(255, 255, 255, 0.45);
+  }
+}

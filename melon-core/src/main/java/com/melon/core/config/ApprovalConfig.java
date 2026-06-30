@@ -16,7 +16,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *   <li>{@code STRICT} - Require explicit approval for every tool call.</li>
  * </ul>
  *
- * <p>This config is consumed by {@link com.melon.core.middleware.ToolGuardMiddleware}.
+ * <p>This config is mapped to AgentScope {@code PermissionContextState}.
  */
 public class ApprovalConfig {
 

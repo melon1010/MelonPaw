@@ -3,6 +3,7 @@
  */
 package com.melon.app.runner;
 
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
 import org.slf4j.Logger;
@@ -14,7 +15,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -27,13 +30,10 @@ public class ChatManager {
 
     private static final Logger log = LoggerFactory.getLogger(ChatManager.class);
 
-    private static final String CHATS_DIR =
-            System.getProperty("user.home") + "/.melon/chats";
-
     private final Path chatsDir;
 
-    public ChatManager() {
-        this.chatsDir = Path.of(CHATS_DIR);
+    public ChatManager(ConfigManager configManager) {
+        this.chatsDir = configManager.resolveHomeDir().resolve("chats");
     }
 
     // ======================== CRUD ========================
@@ -139,6 +139,31 @@ public class ChatManager {
         spec.setUpdatedAt(Instant.now().toString());
         save(spec);
         return spec;
+    }
+
+    public ChatSpec appendMessage(String chatId, String role, String content) {
+        if (chatId == null || chatId.isBlank()) return null;
+        ChatSpec spec = get(chatId);
+        if (spec == null) spec = getBySessionId(chatId);
+        if (spec == null) return null;
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", UUID.randomUUID().toString());
+        message.put("role", role);
+        message.put("content", content != null ? content : "");
+        message.put("created_at", Instant.now().toString());
+        spec.getMessages().add(message);
+        spec.setLastMessage(content);
+        spec.setUpdatedAt(Instant.now().toString());
+        save(spec);
+        return spec;
+    }
+
+    public ChatSpec getBySessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return null;
+        return list().stream()
+                .filter(spec -> sessionId.equals(spec.getSessionId()))
+                .findFirst()
+                .orElse(null);
     }
 
     // ======================== Internal ========================

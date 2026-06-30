@@ -3,6 +3,7 @@
  */
 package com.melon.app.runner;
 
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,13 +28,10 @@ public class QueryErrorDump {
 
     private static final Logger log = LoggerFactory.getLogger(QueryErrorDump.class);
 
-    private static final String DUMPS_DIR =
-            System.getProperty("user.home") + "/.melon/dumps";
-
     private final Path dumpsDir;
 
-    public QueryErrorDump() {
-        this.dumpsDir = Path.of(DUMPS_DIR);
+    public QueryErrorDump(ConfigManager configManager) {
+        this.dumpsDir = configManager.resolveHomeDir().resolve("dumps");
     }
 
     /**

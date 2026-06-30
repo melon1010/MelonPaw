@@ -3,7 +3,6 @@
  */
 package com.melon.app.cron;
 
-import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -137,16 +136,7 @@ public class HeartbeatTask implements Runnable {
      * 从配置解析工作目录.
      */
     private void resolveWorkspaceDir() {
-        AgentConfig defaultConfig = configManager.getConfig().getAgent("default");
-        if (defaultConfig != null && defaultConfig.getWorkspaceDir() != null) {
-            String dir = defaultConfig.getWorkspaceDir();
-            if (dir.startsWith("~")) {
-                dir = dir.replace("~", System.getProperty("user.home"));
-            }
-            workspaceDir = Path.of(dir);
-        } else {
-            workspaceDir = Path.of(System.getProperty("user.home"), ".melon", "workspace");
-        }
+        workspaceDir = configManager.resolveWorkspaceDir("default");
     }
 
     /**

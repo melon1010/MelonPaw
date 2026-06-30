@@ -5,6 +5,7 @@ package com.melon.app.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.melon.core.config.ConfigManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,8 +30,8 @@ public class EnvService {
     private final Path envsFile;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public EnvService() {
-        this.envsFile = Path.of(System.getProperty("user.home"), ".melon", "envs.json");
+    public EnvService(ConfigManager configManager) {
+        this.envsFile = configManager.resolveHomeDir().resolve("envs.json");
         try {
             Files.createDirectories(envsFile.getParent());
             if (!Files.exists(envsFile)) {

@@ -4,6 +4,7 @@
 package com.melon.app.service;
 
 import com.melon.core.agent.WorkspaceManager;
+import com.melon.core.config.ConfigManager;
 import com.melon.core.util.SafePathUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,9 +28,11 @@ public class FileService {
     private static final Logger log = LoggerFactory.getLogger(FileService.class);
     private static final long MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
+    private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
 
-    public FileService(WorkspaceManager workspaceManager) {
+    public FileService(ConfigManager configManager, WorkspaceManager workspaceManager) {
+        this.configManager = configManager;
         this.workspaceManager = workspaceManager;
     }
 
@@ -37,7 +40,7 @@ public class FileService {
      * Lists files in a directory within the agent's workspace.
      */
     public List<Map<String, Object>> listFiles(String agentId, String dirPath) throws IOException {
-        Path workspace = workspaceManager.resolveWorkspaceDir(agentId);
+        Path workspace = workspaceDir(agentId);
         Path target = SafePathUtil.resolveSafe(workspace, dirPath);
         if (target == null) {
             throw new IllegalArgumentException("Invalid path: " + dirPath);
@@ -61,7 +64,7 @@ public class FileService {
      * Reads a file's content as bytes.
      */
     public byte[] readFile(String agentId, String filePath) throws IOException {
-        Path workspace = workspaceManager.resolveWorkspaceDir(agentId);
+        Path workspace = workspaceDir(agentId);
         Path target = SafePathUtil.resolveSafe(workspace, filePath);
         if (target == null) {
             throw new IllegalArgumentException("Invalid path: " + filePath);
@@ -80,7 +83,7 @@ public class FileService {
      * Uploads a file to the agent's workspace.
      */
     public Mono<Map<String, Object>> uploadFile(String agentId, String destDir, FilePart filePart) {
-        Path workspace = workspaceManager.resolveWorkspaceDir(agentId);
+        Path workspace = workspaceDir(agentId);
         Path destPath = SafePathUtil.resolveSafe(workspace, destDir);
         if (destPath == null) {
             return Mono.error(new IllegalArgumentException("Invalid destination: " + destDir));
@@ -117,7 +120,7 @@ public class FileService {
      * Deletes a file (moves to trash).
      */
     public void deleteFile(String agentId, String filePath) throws IOException {
-        Path workspace = workspaceManager.resolveWorkspaceDir(agentId);
+        Path workspace = workspaceDir(agentId);
         Path target = SafePathUtil.resolveSafe(workspace, filePath);
         if (target == null) {
             throw new IllegalArgumentException("Invalid path: " + filePath);
@@ -147,5 +150,15 @@ public class FileService {
             info.put("modified", -1);
         }
         return info;
+    }
+
+    private Path workspaceDir(String agentId) {
+        Path workspace = configManager.resolveWorkspaceDir(safeAgentId(agentId));
+        workspaceManager.initWorkspace(workspace);
+        return workspace;
+    }
+
+    private String safeAgentId(String agentId) {
+        return agentId == null || agentId.isBlank() ? "default" : agentId;
     }
 }

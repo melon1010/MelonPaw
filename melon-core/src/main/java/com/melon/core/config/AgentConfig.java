@@ -19,7 +19,7 @@ public class AgentConfig {
     private String activeModel = "dashscope:qwen-plus";
 
     @JsonProperty("workspace_dir")
-    private String workspaceDir = ".agentscope/workspace";
+    private String workspaceDir;
 
     @JsonProperty("system_prompt_files")
     private List<String> systemPromptFiles = List.of("AGENTS.md", "SOUL.md", "PROFILE.md");
