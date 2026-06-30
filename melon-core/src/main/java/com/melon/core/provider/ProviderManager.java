@@ -56,6 +56,28 @@ public class ProviderManager {
 
         // AgentScope ModelRegistry auto-resolves "provider:model" format
         // Auto-reads environment variables: DASHSCOPE_API_KEY / OPENAI_API_KEY etc.
+
+        // Register DeepSeek model factory (OpenAI-compatible API)
+        // AgentScope doesn't have a built-in deepseek provider, so we register one
+        // using OpenAIChatModel with DeepSeek's base URL and DeepSeekFormatter
+        String deepseekKey = System.getenv("DEEPSEEK_API_KEY");
+        if (deepseekKey != null && !deepseekKey.isBlank()) {
+            final String apiKey = deepseekKey;
+            ModelRegistry.registerFactory("deepseek:(.+)", modelId -> {
+                String modelName = modelId.split(":", 2)[1];
+                return OpenAIChatModel.builder()
+                    .apiKey(apiKey)
+                    .baseUrl("https://api.deepseek.com")
+                    .modelName(modelName)
+                    .formatter(new DeepSeekFormatter())
+                    .stream(true)
+                    .build();
+            });
+            log.info("Registered DeepSeek model factory with ModelRegistry (baseUrl=https://api.deepseek.com)");
+        } else {
+            log.warn("DEEPSEEK_API_KEY not set, DeepSeek models will not be available");
+        }
+
         log.info("ProviderManager initialized with {} providers (ModelRegistry auto-configures from env vars)",
                 providers.size());
     }
