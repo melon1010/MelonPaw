@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
@@ -45,11 +46,12 @@ public class AgentRunner {
                                     Map<String, Object> envInfo) {
         log.info("Stream query: agent={}, user={}, session={}", agentId, userId, sessionId);
 
-        HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
-
-        RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
-
-        return agent.streamEvents(msgs, ctx)
+        return Flux.defer(() -> {
+                    HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+                    RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
+                    return agent.streamEvents(msgs, ctx);
+                })
+                .subscribeOn(Schedulers.boundedElastic())
                 .doOnNext(event -> captureApproval(agentId, sessionId, event))
                 .doOnError(e -> log.error("Agent stream failed: agent={}, user={}, session={}", agentId, userId, sessionId, e));
     }
@@ -62,32 +64,38 @@ public class AgentRunner {
                             Map<String, Object> envInfo) {
         log.info("Query: agent={}, user={}, session={}", agentId, userId, sessionId);
 
-        HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
-
-        RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
-
-        return agent.call(msgs, ctx);
+        return Mono.defer(() -> {
+                    HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+                    RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
+                    return agent.call(msgs, ctx);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     public Mono<Msg> confirm(String agentId, String userId, String sessionId, boolean approved) {
-        HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
-        ToolUseBlock toolCall = approvalService.removePendingToolCall(sessionId);
-        if (toolCall == null) {
-            return Mono.empty();
-        }
-        Msg confirm = io.agentscope.core.message.UserMessage.builder()
-                .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(approved, toolCall))))
-                .build();
-        RuntimeContext ctx = buildContext(userId, sessionId, Map.of("agent_id", agentId, "source", "console"));
-        return agent.call(List.of(confirm), ctx);
+        return Mono.defer(() -> {
+                    HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+                    ToolUseBlock toolCall = approvalService.removePendingToolCall(sessionId);
+                    if (toolCall == null) {
+                        return Mono.empty();
+                    }
+                    Msg confirm = io.agentscope.core.message.UserMessage.builder()
+                            .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(approved, toolCall))))
+                            .build();
+                    RuntimeContext ctx = buildContext(userId, sessionId, Map.of("agent_id", agentId, "source", "console"));
+                    return agent.call(List.of(confirm), ctx);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     private RuntimeContext buildContext(String userId, String sessionId, Map<String, Object> envInfo) {
         RuntimeContext.Builder builder = RuntimeContext.builder()
-                .userId(userId != null ? userId : "default")
                 .sessionId(sessionId != null ? sessionId : "default");
 
         if (envInfo != null) {
+            if (userId != null) {
+                builder.put("user_id", userId);
+            }
             if (envInfo.get("agent_id") != null) {
                 builder.put("agent_id", envInfo.get("agent_id"));
             }

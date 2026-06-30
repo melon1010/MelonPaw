@@ -27,8 +27,7 @@ public class WorkspaceManager {
             "AGENTS.md", "BOOTSTRAP.md", "HEARTBEAT.md", "MEMORY.md", "PROFILE.md", "SOUL.md"
     );
     private static final List<String> WORKSPACE_DIRS = List.of(
-            "sessions", "memory", "skills", "active_skills", "customized_skills",
-            "agents", "browser", "jobs_history", "dialog", "tool_results", "uploads"
+            "memory", "skills", "knowledge", "agents"
     );
 
     /**
@@ -68,7 +67,6 @@ public class WorkspaceManager {
             for (String dirname : WORKSPACE_DIRS) {
                 Files.createDirectories(dir.resolve(dirname));
             }
-            Files.createDirectories(dir.resolve("browser").resolve("user_data"));
             createJsonIfMissing(dir.resolve("chats.json"), Map.of("version", 1, "chats", List.of()));
             createJsonIfMissing(dir.resolve("jobs.json"), Map.of("version", 1, "jobs", List.of()));
             createJsonIfMissing(dir.resolve("agent.json"), Map.of("version", 1));

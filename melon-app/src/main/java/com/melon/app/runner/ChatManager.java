@@ -48,9 +48,14 @@ public class ChatManager {
      */
     public ChatSpec create(String agentId, String title, String model) {
         String chatId = UUID.randomUUID().toString();
+        return create(agentId, chatId, title, model);
+    }
+
+    public ChatSpec create(String agentId, String sessionId, String title, String model) {
+        String chatId = UUID.randomUUID().toString();
         String now = Instant.now().toString();
         ChatSpec spec = new ChatSpec(chatId, agentId, title != null ? title : "New Chat");
-        spec.setSessionId(UUID.randomUUID().toString());
+        spec.setSessionId(sessionId != null && !sessionId.isBlank() ? sessionId : UUID.randomUUID().toString());
         spec.setModel(model);
         spec.setCreatedAt(now);
         spec.setUpdatedAt(now);
@@ -156,6 +161,14 @@ public class ChatManager {
         spec.setUpdatedAt(Instant.now().toString());
         save(spec);
         return spec;
+    }
+
+    public ChatSpec getOrCreateForSession(String agentId, String sessionId, String title, String model) {
+        ChatSpec spec = getBySessionId(sessionId);
+        if (spec != null) return spec;
+        spec = get(sessionId);
+        if (spec != null) return spec;
+        return create(agentId, sessionId, title, model);
     }
 
     public ChatSpec getBySessionId(String sessionId) {

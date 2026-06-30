@@ -3,10 +3,19 @@
  */
 package com.melon.app.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
+import com.melon.app.runner.ChatSpec;
 import com.melon.app.runner.SseEventMapper;
 import com.melon.app.service.ApprovalService;
+import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ToolCallStartEvent;
+import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.event.ToolResultTextDeltaEvent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
@@ -28,6 +37,7 @@ import java.util.*;
 public class ConsoleCompatController {
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleCompatController.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final AgentRunner agentRunner;
     private final SseEventMapper sseEventMapper;
@@ -48,9 +58,10 @@ public class ConsoleCompatController {
             @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
         String userId = stringValue(body.get("user_id"), headerUserId != null ? headerUserId : "default");
         String sessionId = stringValue(body.get("session_id"), "default");
-        String chatId = stringValue(body.get("chat_id"), sessionId);
         String channel = stringValue(body.get("channel"), "console");
         String text = extractInputText(body.get("input"));
+        ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, titleFromText(text), null);
+        String chatId = chat.getId();
 
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("agent_id", agentId);
@@ -65,18 +76,13 @@ public class ConsoleCompatController {
 
         List<Msg> msgs = List.of(new UserMessage(text));
         chatManager.appendMessage(chatId, "user", text);
-        StringBuilder assistantText = new StringBuilder();
+        StreamState streamState = new StreamState();
         return agentRunner.stream(agentId, msgs, userId, sessionId, env)
                 .doOnSubscribe(s -> log.info("Console chat started: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId))
-                .map(sseEventMapper::map)
-                .doOnNext(event -> {
-                    if ("text_delta".equals(event.event()) && event.data() != null) {
-                        assistantText.append(event.data());
-                    }
-                })
+                .flatMapIterable(event -> mapFrontendEvent(event, streamState))
                 .doFinally(signal -> {
-                    if (!assistantText.isEmpty()) {
-                        chatManager.appendMessage(chatId, "assistant", assistantText.toString());
+                    if (!streamState.assistantText.isEmpty()) {
+                        chatManager.appendMessage(chatId, "assistant", streamState.assistantText.toString());
                     }
                     log.info("Console chat finished: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal);
                 })
@@ -84,7 +90,7 @@ public class ConsoleCompatController {
                     log.error("Console chat failed: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId, e);
                     return Flux.just(ServerSentEvent.<String>builder()
                             .event("error")
-                            .data(errorJson(e))
+                            .data(frontendErrorJson(e))
                             .build());
                 });
     }
@@ -155,6 +161,138 @@ public class ConsoleCompatController {
         return text.isBlank() ? fallback : text;
     }
 
+    private List<ServerSentEvent<String>> mapFrontendEvent(AgentEvent event, StreamState state) {
+        return switch (event.getType()) {
+            case TEXT_BLOCK_DELTA -> {
+                String delta = ((TextBlockDeltaEvent) event).getDelta();
+                state.assistantText.append(delta);
+                yield withAssistantMessage(state, frontendTextDelta(state, delta, "in_progress"));
+            }
+            case THINKING_BLOCK_DELTA -> {
+                ThinkingBlockDeltaEvent thinking = (ThinkingBlockDeltaEvent) event;
+                yield withReasoningMessage(state, frontendThinkingDelta(state, thinking.getDelta(), "in_progress"));
+            }
+            case TOOL_CALL_START -> List.of(frontendToolCall((ToolCallStartEvent) event));
+            case TOOL_RESULT_TEXT_DELTA -> List.of(frontendToolResultDelta((ToolResultTextDeltaEvent) event));
+            case TOOL_RESULT_END -> List.of(frontendToolResult((ToolResultEndEvent) event));
+            case AGENT_END -> List.of(frontendCompletedResponse(state));
+            default -> List.of(frontendHeartbeat());
+        };
+    }
+
+    private List<ServerSentEvent<String>> withAssistantMessage(StreamState state, ServerSentEvent<String> event) {
+        if (state.assistantMessageCreated) {
+            return List.of(event);
+        }
+        state.assistantMessageCreated = true;
+        return List.of(frontendMessage(state.assistantMessageId, "message", "assistant", "in_progress"), event);
+    }
+
+    private List<ServerSentEvent<String>> withReasoningMessage(StreamState state, ServerSentEvent<String> event) {
+        if (state.reasoningMessageCreated) {
+            return List.of(event);
+        }
+        state.reasoningMessageCreated = true;
+        return List.of(frontendMessage(state.reasoningMessageId, "reasoning", "assistant", "in_progress"), event);
+    }
+
+    private ServerSentEvent<String> frontendMessage(String messageId, String type, String role, String status) {
+        return ServerSentEvent.<String>builder()
+                .event("message")
+                .data(toJson(runtimeMessage(messageId, type, role, status, List.of())))
+                .build();
+    }
+
+    private ServerSentEvent<String> frontendTextDelta(StreamState state, String text, String status) {
+        return frontendContent(state.assistantMessageId, "text", Map.of("text", text != null ? text : ""), true, status);
+    }
+
+    private ServerSentEvent<String> frontendThinkingDelta(StreamState state, String text, String status) {
+        return frontendContent(state.reasoningMessageId, "text", Map.of("text", text != null ? text : ""), true, status);
+    }
+
+    private ServerSentEvent<String> frontendContent(String messageId, String type, Map<String, Object> fields, boolean delta, String status) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("object", "content");
+        content.put("msg_id", messageId);
+        content.put("type", type);
+        content.put("status", status);
+        content.put("delta", delta);
+        content.putAll(fields);
+        return ServerSentEvent.<String>builder().event("content").data(toJson(content)).build();
+    }
+
+    private ServerSentEvent<String> frontendCompletedResponse(StreamState state) {
+        long now = System.currentTimeMillis() / 1000;
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", state.responseId);
+        response.put("object", "response");
+        response.put("status", "completed");
+        response.put("created_at", now);
+        response.put("completed_at", now);
+        response.put("output", List.of());
+        response.put("error", null);
+        return ServerSentEvent.<String>builder().event("response").data(toJson(response)).build();
+    }
+
+    private ServerSentEvent<String> frontendToolCall(ToolCallStartEvent event) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("type", "data");
+        content.put("status", "completed");
+        content.put("data", Map.of(
+                "name", event.getToolCallName(),
+                "call_id", event.getToolCallId(),
+                "arguments", Map.of()
+        ));
+        Map<String, Object> message = runtimeMessage(toolMessageId(event.getToolCallId()), "tool_call", "assistant", "in_progress", List.of(content));
+        return ServerSentEvent.<String>builder().event("tool_call").data(toJson(message)).build();
+    }
+
+    private ServerSentEvent<String> frontendToolResultDelta(ToolResultTextDeltaEvent event) {
+        return frontendContent(toolMessageId(event.getToolCallId()), "data", Map.of(
+                "data", Map.of(
+                        "name", event.getToolCallName(),
+                        "call_id", event.getToolCallId(),
+                        "output", Map.of("text", event.getDelta() != null ? event.getDelta() : "")
+                )
+        ), false, "in_progress");
+    }
+
+    private ServerSentEvent<String> frontendToolResult(ToolResultEndEvent event) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("type", "data");
+        content.put("status", "completed");
+        content.put("data", Map.of(
+                "name", event.getToolCallName(),
+                "call_id", event.getToolCallId(),
+                "output", Map.of("state", event.getState().name())
+        ));
+        Map<String, Object> message = runtimeMessage(toolMessageId(event.getToolCallId()), "tool_call_output", "tool", "completed", List.of(content));
+        return ServerSentEvent.<String>builder().event("tool_result").data(toJson(message)).build();
+    }
+
+    private ServerSentEvent<String> frontendHeartbeat() {
+        Map<String, Object> message = runtimeMessage("message_" + UUID.randomUUID(), "heartbeat", "assistant", "completed", List.of());
+        return ServerSentEvent.<String>builder().event("heartbeat").data(toJson(message)).build();
+    }
+
+    private Map<String, Object> runtimeMessage(String id, String type, String role, String status, List<Map<String, Object>> content) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", id);
+        message.put("object", "message");
+        message.put("role", role);
+        message.put("type", type);
+        message.put("status", status);
+        message.put("content", content);
+        return message;
+    }
+
+    private String titleFromText(String text) {
+        if (text == null || text.isBlank()) return "New Chat";
+        String title = text.strip().replaceAll("\\s+", " ");
+        return title.length() > 30 ? title.substring(0, 30) : title;
+    }
+
     @SuppressWarnings("unchecked")
     private String extractInputText(Object input) {
         if (input == null) return "";
@@ -200,5 +338,43 @@ public class ConsoleCompatController {
     private String errorJson(Throwable e) {
         String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
         return "{\"detail\":\"" + message.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+    }
+
+    private String frontendErrorJson(Throwable e) {
+        String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        Map<String, Object> error = runtimeMessage("message_" + UUID.randomUUID(), "error", "assistant", "failed", List.of());
+        error.put("code", "CHAT_ERROR");
+        error.put("message", message);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", "response_" + UUID.randomUUID());
+        response.put("object", "response");
+        response.put("status", "failed");
+        response.put("created_at", System.currentTimeMillis() / 1000);
+        response.put("completed_at", System.currentTimeMillis() / 1000);
+        response.put("output", List.of(error));
+        response.put("error", Map.of("code", "CHAT_ERROR", "message", message));
+        return toJson(response);
+    }
+
+    private String toJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            return errorJson(e);
+        }
+    }
+
+    private String toolMessageId(String toolCallId) {
+        return "tool_" + (toolCallId != null && !toolCallId.isBlank() ? toolCallId : UUID.randomUUID());
+    }
+
+    private static class StreamState {
+        final String responseId = "response_" + UUID.randomUUID();
+        final String assistantMessageId = "message_" + UUID.randomUUID();
+        final String reasoningMessageId = "reasoning_" + UUID.randomUUID();
+        final StringBuilder assistantText = new StringBuilder();
+        boolean assistantMessageCreated;
+        boolean reasoningMessageCreated;
     }
 }
