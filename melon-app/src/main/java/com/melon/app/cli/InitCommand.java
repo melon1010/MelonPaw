@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.cli;
 
 import picocli.CommandLine.Command;

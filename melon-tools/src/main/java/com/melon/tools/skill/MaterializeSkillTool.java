@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.skill;
 
 import reactor.core.publisher.Mono;

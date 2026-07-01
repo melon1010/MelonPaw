@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.controller;
 
 import io.agentscope.core.event.AgentEvent;

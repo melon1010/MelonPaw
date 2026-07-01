@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.provider;
 
 import com.melon.core.config.MelonConfig;

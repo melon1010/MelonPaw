@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;

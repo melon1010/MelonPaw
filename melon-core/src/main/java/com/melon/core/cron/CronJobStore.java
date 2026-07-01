@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.cron;
 
 import com.melon.core.util.JsonUtils;

@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.coding.lsp;
 
 import com.melon.core.util.PlatformUtil;

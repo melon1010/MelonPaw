@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.shell;
 
 import io.agentscope.core.tool.ToolBase;

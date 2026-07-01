@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.mcp;
 
 import jakarta.annotation.PostConstruct;

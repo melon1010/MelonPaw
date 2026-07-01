@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.middleware;
 
 import io.agentscope.core.agent.Agent;

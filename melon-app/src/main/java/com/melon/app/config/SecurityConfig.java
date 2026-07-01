@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.config;
 
 import org.springframework.context.annotation.Bean;

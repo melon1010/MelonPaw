@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.util;
 
 import java.io.File;

@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.cron;
 
 import com.fasterxml.jackson.databind.ObjectMapper;

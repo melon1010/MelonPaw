@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.controller;
 
 import com.fasterxml.jackson.core.JsonProcessingException;

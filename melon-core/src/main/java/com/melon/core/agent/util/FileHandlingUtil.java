@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.agent.util;
 
 import com.melon.core.util.TextTruncateUtil;

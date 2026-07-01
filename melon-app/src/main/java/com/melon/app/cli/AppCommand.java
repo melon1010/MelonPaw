@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.cli;
 
 import com.melon.app.MelonApplication;

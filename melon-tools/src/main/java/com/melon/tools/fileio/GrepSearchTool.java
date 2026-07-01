@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;

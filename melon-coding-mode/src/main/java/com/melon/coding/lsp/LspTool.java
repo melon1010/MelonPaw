@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.coding.lsp;
 
 import io.agentscope.core.tool.ToolBase;

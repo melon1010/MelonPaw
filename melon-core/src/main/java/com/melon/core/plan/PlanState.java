@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.plan;
 
 import java.util.ArrayList;

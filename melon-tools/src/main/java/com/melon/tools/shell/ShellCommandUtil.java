@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.shell;
 
 import java.lang.management.ManagementFactory;

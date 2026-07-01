@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.backup;
 
 import com.melon.core.config.ConfigManager;

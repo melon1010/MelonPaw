@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.plugin;
 
 import com.fasterxml.jackson.databind.ObjectMapper;

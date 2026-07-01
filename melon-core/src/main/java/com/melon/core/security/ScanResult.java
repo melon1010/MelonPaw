@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.security;
 
 import java.util.ArrayList;

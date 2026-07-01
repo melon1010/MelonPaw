@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.runner;
 
 import org.slf4j.Logger;

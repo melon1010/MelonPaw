@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.tools.browser;
 
 import com.microsoft.playwright.Browser;

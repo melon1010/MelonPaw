@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.cron;
 
 import com.melon.core.config.ConfigManager;

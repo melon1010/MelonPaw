@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.plugin.api;
 
 import reactor.core.publisher.Mono;

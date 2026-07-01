@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app.cron;
 
 import io.agentscope.core.message.Msg;

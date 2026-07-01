@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.prompt;
 
 import java.nio.file.Files;

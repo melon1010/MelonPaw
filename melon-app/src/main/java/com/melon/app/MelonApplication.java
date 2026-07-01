@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.app;
 
 import org.springframework.boot.SpringApplication;

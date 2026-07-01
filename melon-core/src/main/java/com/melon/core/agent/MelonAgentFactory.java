@@ -1,6 +1,3 @@
-/**
- * @author melon
- */
 package com.melon.core.agent;
 
 import io.agentscope.core.agent.RuntimeContext;
