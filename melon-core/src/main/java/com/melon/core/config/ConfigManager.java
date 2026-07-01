@@ -109,6 +109,7 @@ public class ConfigManager {
         for (var entry : loaded.getAgents().entrySet()) {
             AgentConfig ac = entry.getValue();
             if (ac.getTools() == null) ac.setTools(new ToolsConfig());
+            mergeDefaultTools(ac.getTools());
             if (ac.getRunning() == null) ac.setRunning(new RunningConfig());
             if (ac.getContextCompact() == null) ac.setContextCompact(new ContextCompactConfig());
             if (ac.getCodingMode() == null) ac.setCodingMode(new CodingModeConfig());
@@ -116,6 +117,54 @@ public class ConfigManager {
             if (ac.getApproval() == null) ac.setApproval(new AgentConfig.ApprovalConfig());
         }
         return loaded;
+    }
+
+    private void mergeDefaultTools(ToolsConfig tools) {
+        var current = tools.getBuiltinTools();
+        if (current == null) {
+            tools.setBuiltinTools(new ToolsConfig().getBuiltinTools());
+            return;
+        }
+        new ToolsConfig().getBuiltinTools().forEach(current::putIfAbsent);
+        new ToolsConfig().getBuiltinTools().forEach((name, defaults) -> {
+            BuiltinToolConfig tool = current.get(name);
+            if (tool == null) return;
+            if (tool.getName() == null || tool.getName().isBlank()) tool.setName(name);
+            if (tool.getDescription() == null || tool.getDescription().isBlank()) {
+                tool.setDescription(defaults.getDescription());
+            }
+            if (tool.getIcon() == null || tool.getIcon().isBlank()) tool.setIcon(defaults.getIcon());
+            if (!defaults.isDisplayToUser()) tool.setDisplayToUser(false);
+        });
+        migrateTool(current, "execute", "execute_shell_command");
+        migrateTool(current, "grep_files", "grep_search");
+        migrateTool(current, "glob_files", "glob_search");
+        for (String legacy : java.util.List.of(
+                "execute", "grep_files", "glob_files", "list_files",
+                "append_file", "memory_search", "memory_get",
+                "session_search", "session_list", "session_history",
+                "skill_manage", "propose_skill", "load_skill_through_path",
+                "materialize_skill", "reset_equipped_tools",
+                "plan_enter", "plan_write", "plan_exit",
+                "task", "task_output")) {
+            BuiltinToolConfig tool = current.get(legacy);
+            if (tool != null) {
+                tool.setEnabled(false);
+                tool.setDisplayToUser(false);
+            }
+        }
+    }
+
+    private void migrateTool(java.util.Map<String, BuiltinToolConfig> tools, String from, String to) {
+        BuiltinToolConfig source = tools.get(from);
+        BuiltinToolConfig target = tools.get(to);
+        if (source == null || target == null) return;
+        target.setEnabled(source.isEnabled());
+        target.setAsyncExecution(source.isAsyncExecution());
+        if ((target.getDescription() == null || target.getDescription().isBlank())
+                && source.getDescription() != null) {
+            target.setDescription(source.getDescription());
+        }
     }
 
     public Path resolveHomeDir() {
@@ -130,12 +179,16 @@ public class ConfigManager {
         if (agent != null && agent.getWorkspaceDir() != null && !agent.getWorkspaceDir().isBlank()) {
             return expandPath(agent.getWorkspaceDir());
         }
+        return resolveWorkspaceRootDir().resolve(id).normalize();
+    }
+
+    public Path resolveWorkspaceRootDir() {
         if (config.getPaths() != null
                 && config.getPaths().getWorkspaceRoot() != null
                 && !config.getPaths().getWorkspaceRoot().isBlank()) {
-            return expandPath(config.getPaths().getWorkspaceRoot()).resolve(id).normalize();
+            return expandPath(config.getPaths().getWorkspaceRoot()).normalize();
         }
-        return resolveHomeDir().resolve("workspaces").resolve(id).normalize();
+        return resolveHomeDir().resolve("workspaces").normalize();
     }
 
     public Path resolveSkillPoolDir() {

@@ -58,11 +58,14 @@ public class SkillController {
 
     @GetMapping("/workspaces")
     public Mono<ResponseEntity<?>> listSkillWorkspaces(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
-        return Mono.just(ResponseEntity.ok(List.of(Map.of(
-                "workspace_id", safeAgentId(agentId),
-                "workspace_name", safeAgentId(agentId),
-                "skill_count", skillService.listSkills(agentId).size()
-        ))));
+        return Mono.fromCallable(() -> ResponseEntity.ok(configuredAgents().stream()
+                .map(id -> Map.of(
+                        "agent_id", id,
+                        "agent_name", agentName(id),
+                        "workspace_dir", skillService.workspaceDir(id).toString(),
+                        "skills", skillService.listSkills(id).stream().map(this::skillSpec).toList()
+                ))
+                .toList()));
     }
 
     @GetMapping("/pool")
@@ -309,58 +312,92 @@ public class SkillController {
     }
 
     @PostMapping("/{name}/enable")
-    public Mono<ResponseEntity<?>> enableSkill(@PathVariable String name) {
-        return Mono.just(ResponseEntity.noContent().build());
+    public Mono<ResponseEntity<?>> enableSkill(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                               @PathVariable String name) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(skillService.enableSkill(agentId, name)));
     }
 
     @PostMapping("/{name}/disable")
-    public Mono<ResponseEntity<?>> disableSkill(@PathVariable String name) {
-        return Mono.just(ResponseEntity.noContent().build());
+    public Mono<ResponseEntity<?>> disableSkill(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                @PathVariable String name) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(skillService.disableSkill(agentId, name)));
     }
 
     @PutMapping("/{name}/channels")
-    public Mono<ResponseEntity<?>> updateSkillChannels(@PathVariable String name, @RequestBody List<String> channels) {
-        return Mono.just(ResponseEntity.ok(Map.of("updated", true, "channels", channels != null ? channels : List.of())));
+    public Mono<ResponseEntity<?>> updateSkillChannels(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                       @PathVariable String name,
+                                                       @RequestBody List<String> channels) {
+        return Mono.fromCallable(() -> {
+            List<String> values = channels != null ? channels : List.of();
+            skillService.setSkillChannels(agentId, name, values);
+            return ResponseEntity.ok(Map.of("updated", true, "channels", values));
+        });
     }
 
     @PutMapping("/{name}/tags")
-    public Mono<ResponseEntity<?>> updateSkillTags(@PathVariable String name, @RequestBody List<String> tags) {
-        return Mono.just(ResponseEntity.ok(Map.of("updated", true, "tags", tags != null ? tags : List.of())));
+    public Mono<ResponseEntity<?>> updateSkillTags(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                   @PathVariable String name,
+                                                   @RequestBody List<String> tags) {
+        return Mono.fromCallable(() -> {
+            List<String> values = tags != null ? tags : List.of();
+            skillService.setSkillTags(agentId, name, values);
+            return ResponseEntity.ok(Map.of("updated", true, "tags", values));
+        });
     }
 
     @GetMapping("/{name}/config")
-    public Mono<ResponseEntity<?>> getSkillConfig(@PathVariable String name) {
-        return Mono.just(ResponseEntity.ok(Map.of("config", Map.of())));
+    public Mono<ResponseEntity<?>> getSkillConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                  @PathVariable String name) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(Map.of("config", skillService.getSkillConfig(agentId, name))));
     }
 
     @PutMapping("/{name}/config")
-    public Mono<ResponseEntity<?>> updateSkillConfig(@PathVariable String name, @RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("updated", true)));
+    public Mono<ResponseEntity<?>> updateSkillConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                     @PathVariable String name,
+                                                     @RequestBody(required = false) Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            skillService.setSkillConfig(agentId, name, configPayload(body));
+            return ResponseEntity.ok(Map.of("updated", true));
+        });
     }
 
     @DeleteMapping("/{name}/config")
-    public Mono<ResponseEntity<?>> deleteSkillConfig(@PathVariable String name) {
-        return Mono.just(ResponseEntity.ok(Map.of("cleared", true)));
+    public Mono<ResponseEntity<?>> deleteSkillConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                     @PathVariable String name) {
+        return Mono.fromCallable(() -> {
+            skillService.clearSkillConfig(agentId, name);
+            return ResponseEntity.ok(Map.of("cleared", true));
+        });
     }
 
     @GetMapping("/pool/{name}/config")
     public Mono<ResponseEntity<?>> getPoolSkillConfig(@PathVariable String name) {
-        return getSkillConfig(name);
+        return Mono.fromCallable(() -> ResponseEntity.ok(Map.of("config", skillService.getPoolSkillConfig(name))));
     }
 
     @PutMapping("/pool/{name}/config")
     public Mono<ResponseEntity<?>> updatePoolSkillConfig(@PathVariable String name, @RequestBody(required = false) Map<String, Object> body) {
-        return updateSkillConfig(name, body);
+        return Mono.fromCallable(() -> {
+            skillService.setPoolSkillConfig(name, configPayload(body));
+            return ResponseEntity.ok(Map.of("updated", true));
+        });
     }
 
     @DeleteMapping("/pool/{name}/config")
     public Mono<ResponseEntity<?>> deletePoolSkillConfig(@PathVariable String name) {
-        return deleteSkillConfig(name);
+        return Mono.fromCallable(() -> {
+            skillService.clearPoolSkillConfig(name);
+            return ResponseEntity.ok(Map.of("cleared", true));
+        });
     }
 
     @PutMapping("/pool/{name}/tags")
     public Mono<ResponseEntity<?>> updatePoolSkillTags(@PathVariable String name, @RequestBody List<String> tags) {
-        return updateSkillTags(name, tags);
+        return Mono.fromCallable(() -> {
+            List<String> values = tags != null ? tags : List.of();
+            skillService.setPoolSkillTags(name, values);
+            return ResponseEntity.ok(Map.of("updated", true, "tags", values));
+        });
     }
 
     @PostMapping("/pool/{name}/update-builtin")
@@ -394,20 +431,22 @@ public class SkillController {
         });
     }
 
-    private Map<String, Object> skillSpec(Map<String, String> raw) {
+    private Map<String, Object> skillSpec(Map<String, Object> raw) {
         Map<String, Object> spec = new LinkedHashMap<>();
-        spec.put("name", raw.getOrDefault("name", ""));
-        spec.put("description", raw.getOrDefault("description", ""));
-        spec.put("path", raw.getOrDefault("path", ""));
-        spec.put("enabled", true);
-        spec.put("source", "local");
-        spec.put("tags", List.of());
-        spec.put("channels", List.of());
-        spec.put("config", Map.of());
+        spec.put("name", stringValue(raw.get("name"), ""));
+        spec.put("description", stringValue(raw.get("description"), ""));
+        spec.put("path", stringValue(raw.get("path"), ""));
+        spec.put("content", stringValue(raw.get("content"), ""));
+        spec.put("enabled", Boolean.TRUE.equals(raw.get("enabled")));
+        spec.put("source", stringValue(raw.get("source"), "local"));
+        spec.put("tags", raw.getOrDefault("tags", List.of()));
+        spec.put("channels", raw.getOrDefault("channels", List.of()));
+        spec.put("config", raw.getOrDefault("config", Map.of()));
+        spec.put("last_updated", stringValue(raw.get("last_updated"), ""));
         return spec;
     }
 
-    private Map<String, Object> poolSkillSpec(Map<String, String> raw) {
+    private Map<String, Object> poolSkillSpec(Map<String, Object> raw) {
         Map<String, Object> spec = skillSpec(raw);
         spec.put("protected", false);
         spec.put("external", false);
@@ -480,6 +519,26 @@ public class SkillController {
 
     private String safeAgentId(String agentId) {
         return agentId == null || agentId.isBlank() ? "default" : agentId;
+    }
+
+    private List<String> configuredAgents() {
+        return new ArrayList<>(skillService.agentIds());
+    }
+
+    private String agentName(String id) {
+        var config = skillService.agentConfig(id);
+        return config != null && config.getName() != null ? config.getName() : id;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> configPayload(Map<String, Object> body) {
+        Object raw = body != null ? body.get("config") : null;
+        if (raw instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((k, v) -> result.put(String.valueOf(k), v));
+            return result;
+        }
+        return Map.of();
     }
 
     private String stringValue(Object value, String fallback) {

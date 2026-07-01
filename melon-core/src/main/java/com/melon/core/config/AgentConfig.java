@@ -15,6 +15,12 @@ public class AgentConfig {
     @JsonProperty("name")
     private String name = "default";
 
+    @JsonProperty("description")
+    private String description = "";
+
+    @JsonProperty("enabled")
+    private boolean enabled = true;
+
     @JsonProperty("active_model")
     private String activeModel = "dashscope:qwen-plus";
 
@@ -47,6 +53,12 @@ public class AgentConfig {
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+
+    public boolean isEnabled() { return enabled; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
     public String getActiveModel() { return activeModel; }
     public void setActiveModel(String activeModel) { this.activeModel = activeModel; }

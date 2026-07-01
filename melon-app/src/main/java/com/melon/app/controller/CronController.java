@@ -4,7 +4,7 @@
 package com.melon.app.controller;
 
 import com.melon.core.config.ConfigManager;
-import com.melon.core.util.JsonUtils;
+import com.melon.core.cron.CronJobStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -24,19 +24,19 @@ public class CronController {
 
     private static final Logger log = LoggerFactory.getLogger(CronController.class);
 
-    private final Path cronsFile;
+    private final ConfigManager configManager;
 
     public CronController(ConfigManager configManager) {
-        this.cronsFile = configManager.resolveHomeDir().resolve("crons.json");
+        this.configManager = configManager;
     }
 
     /**
      * 列出所有定时任务.
      */
     @GetMapping
-    public Mono<ResponseEntity<?>> listCrons() {
+    public Mono<ResponseEntity<?>> listCrons(@RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
         return Mono.fromCallable(() -> {
-            List<Map<String, Object>> crons = loadCrons();
+            List<Map<String, Object>> crons = loadCrons(agentId);
             return ResponseEntity.ok(crons);
         });
     }
@@ -45,19 +45,18 @@ public class CronController {
      * 创建定时任务.
      */
     @PostMapping
-    public Mono<ResponseEntity<?>> createCron(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> createCron(@RequestBody Map<String, Object> body,
+                                              @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
         return Mono.fromCallable(() -> {
             try {
                 String name = (String) body.get("name");
-                String cron = (String) body.get("cron");
-                String prompt = (String) body.get("prompt");
 
-                if (name == null || cron == null || prompt == null) {
+                if (name == null) {
                     return ResponseEntity.badRequest()
-                            .body(Map.of("error", "name, cron, and prompt are required"));
+                            .body(Map.of("error", "name is required"));
                 }
 
-                List<Map<String, Object>> crons = loadCrons();
+                List<Map<String, Object>> crons = loadCrons(agentId);
 
                 // Check for duplicate name
                 boolean exists = crons.stream()
@@ -67,18 +66,9 @@ public class CronController {
                             .body(Map.of("error", "Cron with name '" + name + "' already exists"));
                 }
 
-                Map<String, Object> cronEntry = new LinkedHashMap<>();
-                cronEntry.put("id", UUID.randomUUID().toString());
-                cronEntry.put("name", name);
-                cronEntry.put("cron", cron);
-                cronEntry.put("prompt", prompt);
-                cronEntry.put("enabled", body.getOrDefault("enabled", true));
-                cronEntry.put("created_at", System.currentTimeMillis());
+                Map<String, Object> cronEntry = CronJobStore.create(workspaceDir(agentId), body);
 
-                crons.add(cronEntry);
-                saveCrons(crons);
-
-                log.info("Cron created: {} ({})", name, cron);
+                log.info("Cron created: {} ({})", name, cronEntry.get("cron"));
                 return ResponseEntity.ok(cronEntry);
             } catch (Exception e) {
                 log.error("Failed to create cron", e);
@@ -92,14 +82,13 @@ public class CronController {
      * 删除定时任务.
      */
     @DeleteMapping("/{name}")
-    public Mono<ResponseEntity<?>> deleteCron(@PathVariable String name) {
+    public Mono<ResponseEntity<?>> deleteCron(@PathVariable String name,
+                                              @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
         return Mono.fromCallable(() -> {
-            List<Map<String, Object>> crons = loadCrons();
-            boolean removed = crons.removeIf(c -> name.equals(c.get("name")));
+            boolean removed = CronJobStore.delete(workspaceDir(agentId), name);
             if (!removed) {
                 return ResponseEntity.notFound().build();
             }
-            saveCrons(crons);
             log.info("Cron deleted: {}", name);
             return ResponseEntity.ok(Map.of("status", "deleted", "name", name));
         });
@@ -111,7 +100,8 @@ public class CronController {
     @PutMapping("/{name}/enabled")
     public Mono<ResponseEntity<?>> toggleCron(
             @PathVariable String name,
-            @RequestBody Map<String, Object> body) {
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
         return Mono.fromCallable(() -> {
             Boolean enabled = (Boolean) body.get("enabled");
             if (enabled == null) {
@@ -119,39 +109,20 @@ public class CronController {
                         .body(Map.of("error", "'enabled' field is required"));
             }
 
-            List<Map<String, Object>> crons = loadCrons();
-            boolean found = false;
-            for (Map<String, Object> cron : crons) {
-                if (name.equals(cron.get("name"))) {
-                    cron.put("enabled", enabled);
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (!CronJobStore.setEnabled(workspaceDir(agentId), name, enabled)) {
                 return ResponseEntity.notFound().build();
             }
 
-            saveCrons(crons);
             log.info("Cron '{}' enabled={}", name, enabled);
             return ResponseEntity.ok(Map.of("name", name, "enabled", enabled));
         });
     }
 
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> loadCrons() {
-        var raw = JsonUtils.loadAsMap(cronsFile);
-        Object list = raw.get("crons");
-        if (list instanceof List) {
-            return new ArrayList<>((List<Map<String, Object>>) list);
-        }
-        return new ArrayList<>();
+    private List<Map<String, Object>> loadCrons(String agentId) {
+        return CronJobStore.load(workspaceDir(agentId));
     }
 
-    private void saveCrons(List<Map<String, Object>> crons) {
-        Map<String, Object> wrapper = new LinkedHashMap<>();
-        wrapper.put("crons", crons);
-        JsonUtils.save(cronsFile, wrapper);
+    private Path workspaceDir(String agentId) {
+        return configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId));
     }
 }

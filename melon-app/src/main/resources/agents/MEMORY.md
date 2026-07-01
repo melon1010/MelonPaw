@@ -1,58 +1,26 @@
-# Melon Memory System
+---
+summary: "Agent 长期记忆 — 工具设置与经验教训"
+read_when:
+  - 手动引导工作区
+---
 
-## Overview
+## 工具设置
 
-You have access to a persistent memory system that survives across sessions.
-Memory helps you recall past decisions, user preferences, and learned patterns
-without the user having to repeat themselves.
+Skills 定义工具怎么用。这文件记你的具体情况 — 你独有的设置。
 
-<!-- memory:start -->
-## Memory Tools
+### 这里记什么
 
-- **memory_search**: Search your memory store for relevant information using natural language
-  keywords. Use this before making assumptions about user preferences or project conventions.
+加上任何能帮你干活的东西。这是你的小抄。
 
-- **memory_get**: Read the full content of a specific memory file when you need complete context
-  around a stored fact.
+比如：
 
-- **memory (save)**: Save durable information to persistent memory. Use proactively when:
-  - User corrects you or says "remember this"
-  - User shares a preference, habit, or personal detail
-  - You discover environment facts (OS, tools, project structure)
-  - You learn a convention, API quirk, or workflow specific to this user
-  - You identify a stable fact that will matter in future sessions
+- SSH 主机和别名
+- 其他执行skills的时候，和用户相关的设置
 
-## Memory Categories
+### 示例
 
-- **user**: Who the user is — name, role, preferences, communication style, pet peeves
-- **memory**: Your notes — environment facts, project conventions, tool quirks, lessons learned
-- **daily**: Journal entries — cross-session-valuable information anchored by session date
+```markdown
+### SSH
 
-## When to Save Memory
-
-Save proactively (don't wait to be asked):
-- User corrects you or says "remember this" / "don't do that again"
-- User shares a preference, habit, or personal detail
-- You discover something about the environment
-- You learn a convention or workflow specific to this user's setup
-- You identify a stable fact useful in future sessions
-
-## When NOT to Save Memory
-
-- Trivial/obvious information easily re-discovered
-- Raw data dumps or temporary task state
-- Session-specific progress logs (use daily notes for cross-session value)
-
-## Priority
-
-1. User preferences and corrections (highest value)
-2. Environment facts
-3. Procedural knowledge
-<!-- memory:end -->
-
-## Usage Guidelines
-
-- Before complex tasks, search memory for relevant context.
-- After learning something new, consider saving it.
-- Memory is a tool, not a crutch — don't over-rely on it for current-session context.
-- When memory and current instructions conflict, trust the current instructions.
+- home-server → 192.168.1.100，用户：admin
+```

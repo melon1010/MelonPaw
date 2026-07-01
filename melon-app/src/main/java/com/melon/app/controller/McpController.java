@@ -4,6 +4,8 @@
 package com.melon.app.controller;
 
 import com.melon.app.mcp.McpClientManager;
+import com.melon.core.config.ConfigManager;
+import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +14,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -34,9 +37,11 @@ public class McpController {
     private static final Logger log = LoggerFactory.getLogger(McpController.class);
 
     private final McpClientManager mcpClientManager;
+    private final ConfigManager configManager;
 
-    public McpController(McpClientManager mcpClientManager) {
+    public McpController(McpClientManager mcpClientManager, ConfigManager configManager) {
         this.mcpClientManager = mcpClientManager;
+        this.configManager = configManager;
     }
 
     @GetMapping
@@ -62,7 +67,7 @@ public class McpController {
         return Mono.fromCallable(() -> {
             var config = McpClientManager.McpServerConfig.fromMap(normalizeClientBody(body));
             mcpClientManager.register(config);
-            return ResponseEntity.ok(clientInfo(config));
+            return ResponseEntity.status(201).body(clientInfo(config));
         });
     }
 
@@ -133,34 +138,32 @@ public class McpController {
 
     @GetMapping("/policy/{clientKey}")
     public Mono<ResponseEntity<?>> getPolicy(@PathVariable String clientKey) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "client_key", clientKey,
-                "enabled", false,
-                "rules", List.of(),
-                "default_action", "allow"
-        )));
+        return Mono.fromCallable(() -> ResponseEntity.ok(policy(clientKey)));
     }
 
     @PutMapping("/policy/{clientKey}")
     public Mono<ResponseEntity<?>> updatePolicy(@PathVariable String clientKey, @RequestBody Map<String, Object> body) {
-        Map<String, Object> result = new java.util.LinkedHashMap<>();
-        result.put("client_key", clientKey);
-        if (body != null) result.putAll(body);
-        return Mono.just(ResponseEntity.ok(result));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> result = defaultPolicy();
+            if (body != null) result.putAll(body);
+            JsonUtils.save(policyFile(clientKey), result);
+            return ResponseEntity.ok(result);
+        });
     }
 
     @PostMapping("/oauth/start/{clientKey}")
     public Mono<ResponseEntity<?>> startOAuth(@PathVariable String clientKey) {
         return Mono.just(ResponseEntity.ok(Map.of(
+                "auth_url", "",
+                "session_id", "",
                 "authorization_url", "",
-                "enabled", false,
                 "detail", "OAuth MCP clients are not implemented in Java compatibility mode"
         )));
     }
 
     @GetMapping("/oauth/status/{clientKey}")
     public Mono<ResponseEntity<?>> oauthStatus(@PathVariable String clientKey) {
-        return Mono.just(ResponseEntity.ok(Map.of("client_key", clientKey, "authenticated", false, "enabled", false)));
+        return Mono.just(ResponseEntity.ok(Map.of("authorized", false, "expires_at", 0, "scope", "")));
     }
 
     @DeleteMapping("/oauth/{clientKey}")
@@ -312,16 +315,23 @@ public class McpController {
     private Map<String, Object> normalizeClientBody(Map<String, Object> body) {
         Map<String, Object> normalized = new java.util.LinkedHashMap<>();
         if (body == null) body = Map.of();
+        if (body.get("client") instanceof Map<?, ?> client) {
+            client.forEach((k, v) -> normalized.put(String.valueOf(k), v));
+            Object key = firstPresent(body, "client_key", "key", "id");
+            if (key != null) normalized.put("id", String.valueOf(key));
+        }
         Object id = firstPresent(body, "id", "key", "client_key");
         Object name = firstPresent(body, "name", "display_name", "client_key", "key");
-        normalized.put("id", id != null ? String.valueOf(id) : null);
-        normalized.put("name", name != null ? String.valueOf(name) : null);
-        normalized.put("transport", String.valueOf(firstPresent(body, "transport", "transport_type") != null ? firstPresent(body, "transport", "transport_type") : "stdio"));
-        normalized.put("command", firstPresent(body, "command", "cmd"));
-        normalized.put("args", body.getOrDefault("args", List.of()));
-        normalized.put("env", body.getOrDefault("env", Map.of()));
-        normalized.put("url", firstPresent(body, "url", "server_url"));
-        normalized.put("enabled", body.getOrDefault("enabled", true));
+        normalized.putIfAbsent("id", id != null ? String.valueOf(id) : null);
+        normalized.putIfAbsent("name", name != null ? String.valueOf(name) : null);
+        normalized.putIfAbsent("transport", String.valueOf(firstPresent(normalized, "transport", "transport_type") != null ? firstPresent(normalized, "transport", "transport_type") : "stdio"));
+        normalized.putIfAbsent("command", firstPresent(body, "command", "cmd"));
+        normalized.putIfAbsent("args", body.getOrDefault("args", List.of()));
+        normalized.putIfAbsent("env", body.getOrDefault("env", Map.of()));
+        normalized.putIfAbsent("headers", body.getOrDefault("headers", Map.of()));
+        normalized.putIfAbsent("cwd", body.getOrDefault("cwd", ""));
+        normalized.putIfAbsent("url", firstPresent(body, "url", "server_url"));
+        normalized.putIfAbsent("enabled", body.getOrDefault("enabled", true));
         return normalized;
     }
 
@@ -335,11 +345,17 @@ public class McpController {
     }
 
     private Map<String, Object> clientInfo(McpClientManager.McpServerConfig config) {
-        Map<String, Object> map = config.toMap();
+        Map<String, Object> map = new LinkedHashMap<>(config.toMap());
         var state = mcpClientManager.getConnectionState(config.getId());
         map.put("key", config.getId());
         map.put("client_key", config.getId());
         map.put("display_name", config.getName());
+        map.put("description", "");
+        map.putIfAbsent("headers", Map.of());
+        map.putIfAbsent("cwd", "");
+        map.put("tools", null);
+        map.put("oauth_status", null);
+        map.put("access_summary", Map.of("default_effect", policy(config.getId()).get("default_effect"), "overrides_count", 0));
         map.put("connected", state.connected());
         map.put("status", state.connected() ? "connected" : "disconnected");
         map.put("available", config.isEnabled());
@@ -347,5 +363,27 @@ public class McpController {
             map.put("error", state.error());
         }
         return map;
+    }
+
+    private Map<String, Object> policy(String clientKey) {
+        Map<String, Object> saved = JsonUtils.loadAsMap(policyFile(clientKey));
+        if (saved.isEmpty()) return defaultPolicy();
+        Map<String, Object> result = defaultPolicy();
+        result.putAll(saved);
+        return result;
+    }
+
+    private Map<String, Object> defaultPolicy() {
+        Map<String, Object> policy = new LinkedHashMap<>();
+        policy.put("default_effect", "allow");
+        policy.put("client_overrides", List.of());
+        policy.put("tool_defaults", List.of());
+        policy.put("tool_overrides", List.of());
+        policy.put("unmanaged_rules_count", 0);
+        return policy;
+    }
+
+    private java.nio.file.Path policyFile(String clientKey) {
+        return configManager.resolveStateDir().resolve("mcp-policies").resolve(clientKey + ".json");
     }
 }

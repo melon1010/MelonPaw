@@ -14,16 +14,20 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.codec.ServerSentEvent;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.Comparator;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -48,15 +52,16 @@ public class WorkspaceController {
      * 获取工作区信息 (路径、AGENTS.md 内容、目录列表).
      */
     @GetMapping
-    public Mono<ResponseEntity<?>> getWorkspace() {
+    public Mono<ResponseEntity<?>> getWorkspace(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
             try {
-                AgentConfig agentConfig = configManager.getConfig().getAgent("default");
+                String id = AgentRequestSupport.agentId(agentId);
+                AgentConfig agentConfig = configManager.getConfig().getAgent(id);
                 if (agentConfig == null) {
                     return ResponseEntity.notFound().build();
                 }
 
-                Path workspaceDir = configManager.resolveWorkspaceDir("default");
+                Path workspaceDir = configManager.resolveWorkspaceDir(id);
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("path", workspaceDir.toString());
 
@@ -93,15 +98,17 @@ public class WorkspaceController {
      * 更新工作区 (主要更新 AGENTS.md 内容).
      */
     @PutMapping
-    public Mono<ResponseEntity<?>> updateWorkspace(@RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity<?>> updateWorkspace(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                   @RequestBody Map<String, String> body) {
         return Mono.fromCallable(() -> {
             try {
-                AgentConfig agentConfig = configManager.getConfig().getAgent("default");
+                String id = AgentRequestSupport.agentId(agentId);
+                AgentConfig agentConfig = configManager.getConfig().getAgent(id);
                 if (agentConfig == null) {
                     return ResponseEntity.notFound().build();
                 }
 
-                Path workspaceDir = configManager.resolveWorkspaceDir("default");
+                Path workspaceDir = configManager.resolveWorkspaceDir(id);
                 Files.createDirectories(workspaceDir);
 
                 // Update AGENTS.md if provided
@@ -133,15 +140,16 @@ public class WorkspaceController {
      * 初始化工作区 (创建目录结构和默认文件).
      */
     @PostMapping("/init")
-    public Mono<ResponseEntity<?>> initWorkspace() {
+    public Mono<ResponseEntity<?>> initWorkspace(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
             try {
-                AgentConfig agentConfig = configManager.getConfig().getAgent("default");
+                String id = AgentRequestSupport.agentId(agentId);
+                AgentConfig agentConfig = configManager.getConfig().getAgent(id);
                 if (agentConfig == null) {
                     return ResponseEntity.notFound().build();
                 }
 
-                Path workspaceDir = configManager.resolveWorkspaceDir("default");
+                Path workspaceDir = configManager.resolveWorkspaceDir(id);
                 workspaceManager.initWorkspace(workspaceDir);
 
                 return ResponseEntity.ok(Map.of("status", "initialized", "path", workspaceDir.toString()));
@@ -154,9 +162,9 @@ public class WorkspaceController {
     }
 
     @GetMapping("/running-config")
-    public Mono<ResponseEntity<?>> getRunningConfig() {
+    public Mono<ResponseEntity<?>> getRunningConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
-            AgentConfig agentConfig = configManager.getConfig().getAgent("default");
+            AgentConfig agentConfig = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("max_iters", agentConfig.getRunning().getMaxIters());
             result.put("auto_continue_on_text_only", true);
@@ -265,40 +273,35 @@ public class WorkspaceController {
     }
 
     @GetMapping("/files")
-    public Mono<ResponseEntity<?>> listWorkspaceFiles() {
-        return Mono.fromCallable(() -> ResponseEntity.ok(listFiles(resolveDefaultWorkspace(), "")));
+    public Mono<ResponseEntity<?>> listWorkspaceFiles(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(listWorkingMarkdownFiles(resolveWorkspace(agentId))));
     }
 
     @GetMapping("/files/{*fileName}")
-    public Mono<ResponseEntity<?>> readWorkspaceFile(@PathVariable String fileName) {
+    public Mono<ResponseEntity<?>> readWorkspaceFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                     @PathVariable String fileName) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             String cleanName = cleanCapturedPath(fileName);
-            Path file = workspace.resolve(cleanName).normalize();
-            if (!file.startsWith(workspace) || !Files.exists(file) || Files.isDirectory(file)) {
+            Path file = resolveWorkingMarkdownFile(workspace, cleanName);
+            if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
             }
-            return ResponseEntity.ok(Map.of(
-                    "name", file.getFileName().toString(),
-                    "path", workspace.relativize(file).toString().replace('\\', '/'),
-                    "content", Files.readString(file)
-            ));
+            return ResponseEntity.ok(Map.of("content", Files.readString(file).strip()));
         });
     }
 
     @PutMapping("/files/{*fileName}")
-    public Mono<ResponseEntity<?>> writeWorkspaceFile(@PathVariable String fileName, @RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> writeWorkspaceFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                      @PathVariable String fileName,
+                                                      @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             Files.createDirectories(workspace);
             String cleanName = cleanCapturedPath(fileName);
-            Path file = workspace.resolve(cleanName).normalize();
-            if (!file.startsWith(workspace)) {
-                return ResponseEntity.badRequest().body(Map.of("detail", "Invalid path"));
-            }
-            Files.createDirectories(file.getParent());
+            Path file = resolveWorkingMarkdownFile(workspace, cleanName);
             Files.writeString(file, String.valueOf(body.getOrDefault("content", "")));
-            return ResponseEntity.ok(Map.of("path", workspace.relativize(file).toString().replace('\\', '/'), "saved", true));
+            return ResponseEntity.ok(Map.of("written", true));
         });
     }
 
@@ -318,14 +321,15 @@ public class WorkspaceController {
     }
 
     @GetMapping("/code-files")
-    public Mono<ResponseEntity<?>> listCodeFiles() {
-        return Mono.fromCallable(() -> ResponseEntity.ok(listFiles(resolveDefaultWorkspace(), "")));
+    public Mono<ResponseEntity<?>> listCodeFiles(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(listFiles(resolveWorkspace(agentId), "")));
     }
 
     @GetMapping("/code-files/{*filePath}")
-    public Mono<ResponseEntity<?>> readCodeFile(@PathVariable String filePath) {
+    public Mono<ResponseEntity<?>> readCodeFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                @PathVariable String filePath) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
             if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
@@ -338,9 +342,11 @@ public class WorkspaceController {
     }
 
     @PutMapping("/code-files/{*filePath}")
-    public Mono<ResponseEntity<?>> writeCodeFile(@PathVariable String filePath, @RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> writeCodeFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                 @PathVariable String filePath,
+                                                 @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
             Files.createDirectories(file.getParent());
             Files.writeString(file, String.valueOf(body.getOrDefault("content", "")));
@@ -352,9 +358,10 @@ public class WorkspaceController {
     }
 
     @GetMapping("/binary-files/{*filePath}")
-    public Mono<ResponseEntity<?>> readBinaryFile(@PathVariable String filePath) {
+    public Mono<ResponseEntity<?>> readBinaryFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                  @PathVariable String filePath) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
             if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
@@ -366,9 +373,9 @@ public class WorkspaceController {
     }
 
     @GetMapping("/download")
-    public Mono<ResponseEntity<?>> downloadWorkspace() {
+    public Mono<ResponseEntity<?>> downloadWorkspace(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
-            Path workspace = resolveDefaultWorkspace();
+            Path workspace = resolveWorkspace(agentId);
             Path zip = Files.createTempFile("qwenpaw-workspace-", ".zip");
             try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zip))) {
                 if (Files.exists(workspace)) {
@@ -390,8 +397,9 @@ public class WorkspaceController {
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<ResponseEntity<?>> uploadWorkspaceFile(@RequestPart("file") FilePart filePart) {
-        Path workspace = resolveDefaultWorkspace();
+    public Mono<ResponseEntity<?>> uploadWorkspaceFile(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                       @RequestPart("file") FilePart filePart) {
+        Path workspace = resolveWorkspace(agentId);
         Path target = resolveInside(workspace, filePart.filename());
         try {
             Files.createDirectories(target.getParent());
@@ -403,8 +411,8 @@ public class WorkspaceController {
     }
 
     @GetMapping("/system-prompt-files")
-    public Mono<ResponseEntity<?>> systemPromptFiles() {
-        AgentConfig agentConfig = configManager.getConfig().getAgent("default");
+    public Mono<ResponseEntity<?>> systemPromptFiles(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        AgentConfig agentConfig = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
         return Mono.just(ResponseEntity.ok(agentConfig.getSystemPromptFiles()));
     }
 
@@ -413,13 +421,70 @@ public class WorkspaceController {
         return Mono.just(ResponseEntity.ok(files != null ? files : List.of()));
     }
 
-    @GetMapping("/watch")
-    public Mono<ResponseEntity<?>> watch() {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", false, "events", List.of())));
+    @GetMapping(value = "/watch", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<Map<String, Object>>> watch(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        Flux<ServerSentEvent<Map<String, Object>>> stream = Flux.create(sink -> {
+            Path root = resolveWorkspace(agentId);
+            try {
+                Files.createDirectories(root);
+                WatchService watchService = FileSystems.getDefault().newWatchService();
+                registerAll(root, watchService);
+                Thread thread = new Thread(() -> {
+                    try {
+                        sink.next(ServerSentEvent.builder(Map.<String, Object>of("type", "ready")).event("ready").build());
+                        while (!sink.isCancelled()) {
+                            WatchKey key = watchService.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+                            if (key == null) continue;
+                            Path dir = (Path) key.watchable();
+                            List<Map<String, Object>> changes = new ArrayList<>();
+                            for (WatchEvent<?> event : key.pollEvents()) {
+                                if (event.kind() == StandardWatchEventKinds.OVERFLOW) continue;
+                                Path changed = dir.resolve((Path) event.context()).normalize();
+                                if (Files.isDirectory(changed) && event.kind() == StandardWatchEventKinds.ENTRY_CREATE) {
+                                    try {
+                                        registerAll(changed, watchService);
+                                    } catch (IOException ignored) {
+                                    }
+                                }
+                                if (!changed.startsWith(root)) continue;
+                                changes.add(Map.of(
+                                        "change", changeName(event.kind()),
+                                        "path", root.relativize(changed).toString().replace('\\', '/')
+                                ));
+                            }
+                            key.reset();
+                            if (!changes.isEmpty()) {
+                                sink.next(ServerSentEvent.builder(Map.<String, Object>of("type", "file_change", "events", changes)).event("file_change").build());
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (!sink.isCancelled()) sink.error(e);
+                    } finally {
+                        try {
+                            watchService.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }, "workspace-watch-" + AgentRequestSupport.agentId(agentId));
+                thread.setDaemon(true);
+                thread.start();
+                sink.onCancel(() -> {
+                    try {
+                        watchService.close();
+                    } catch (IOException ignored) {
+                    }
+                });
+            } catch (IOException e) {
+                sink.error(e);
+            }
+        });
+        Flux<ServerSentEvent<Map<String, Object>>> pings = Flux.interval(Duration.ofSeconds(15))
+                .map(i -> ServerSentEvent.builder(Map.<String, Object>of("type", "ping")).event("ping").build());
+        return stream.mergeWith(pings);
     }
 
-    private Path resolveDefaultWorkspace() {
-        return configManager.resolveWorkspaceDir("default");
+    private Path resolveWorkspace(String agentId) {
+        return configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId));
     }
 
     private Path resolveInside(Path root, String path) {
@@ -460,5 +525,62 @@ public class WorkspaceController {
             });
         }
         return result;
+    }
+
+    private List<Map<String, Object>> listWorkingMarkdownFiles(Path root) throws IOException {
+        List<Map<String, Object>> result = new ArrayList<>();
+        if (!Files.exists(root)) return result;
+        try (var stream = Files.list(root)) {
+            for (Path path : stream
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".md"))
+                    .sorted(Comparator.comparing(this::lastModifiedMillis).reversed())
+                    .toList()) {
+                Map<String, Object> info = new LinkedHashMap<>();
+                info.put("filename", path.getFileName().toString());
+                info.put("path", path.toString());
+                info.put("size", Files.size(path));
+                info.put("created_time", Files.getLastModifiedTime(path).toInstant().toString());
+                info.put("modified_time", Files.getLastModifiedTime(path).toInstant().toString());
+                result.add(info);
+            }
+        }
+        return result;
+    }
+
+    private Path resolveWorkingMarkdownFile(Path workspace, String name) {
+        String fileName = Path.of(name == null || name.isBlank() ? "AGENTS.md" : name).getFileName().toString();
+        if (!fileName.endsWith(".md")) fileName += ".md";
+        Path file = workspace.resolve(fileName).normalize();
+        if (!file.startsWith(workspace.normalize())) {
+            throw new IllegalArgumentException("Invalid path");
+        }
+        return file;
+    }
+
+    private long lastModifiedMillis(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            return 0L;
+        }
+    }
+
+    private void registerAll(Path root, WatchService watchService) throws IOException {
+        if (!Files.exists(root)) return;
+        try (var stream = Files.walk(root)) {
+            for (Path dir : stream.filter(Files::isDirectory).toList()) {
+                dir.register(watchService,
+                        StandardWatchEventKinds.ENTRY_CREATE,
+                        StandardWatchEventKinds.ENTRY_MODIFY,
+                        StandardWatchEventKinds.ENTRY_DELETE);
+            }
+        }
+    }
+
+    private String changeName(WatchEvent.Kind<?> kind) {
+        if (kind == StandardWatchEventKinds.ENTRY_CREATE) return "added";
+        if (kind == StandardWatchEventKinds.ENTRY_DELETE) return "deleted";
+        return "modified";
     }
 }

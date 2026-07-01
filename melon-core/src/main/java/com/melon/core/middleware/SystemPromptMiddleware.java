@@ -65,6 +65,11 @@ public class SystemPromptMiddleware implements MiddlewareBase {
             sb.append("## Environment\n\n").append(envContext);
         }
 
+        String skillContext = buildSkillContext();
+        if (!skillContext.isEmpty()) {
+            sb.append("\n\n").append(skillContext);
+        }
+
         // 3. 如果没有读到任何文件, 使用 AgentScope 已有内容
         if (sb.isEmpty()) {
             return Mono.just(currentPrompt);
@@ -128,5 +133,26 @@ public class SystemPromptMiddleware implements MiddlewareBase {
         }
         sb.append("- Channel: ").append(channel).append("\n");
         return sb.toString();
+    }
+
+    private String buildSkillContext() {
+        Path skillsDir = workspaceDir.resolve("skills");
+        if (!Files.exists(skillsDir)) return "";
+        try (var stream = Files.list(skillsDir)) {
+            List<String> names = stream
+                    .filter(Files::isDirectory)
+                    .filter(path -> !Files.exists(path.resolve(".disabled")))
+                    .map(path -> path.getFileName().toString())
+                    .sorted()
+                    .toList();
+            if (names.isEmpty()) return "";
+            return "## Available Skills\n\n"
+                    + "Use `materialize_skill` to load these workspace skills when they are relevant: "
+                    + String.join(", ", names)
+                    + ".";
+        } catch (Exception e) {
+            log.warn("Failed to list workspace skills {}", skillsDir, e);
+            return "";
+        }
     }
 }

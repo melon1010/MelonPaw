@@ -29,14 +29,14 @@ public class GitCompatController {
     }
 
     @GetMapping("/status")
-    public Mono<ResponseEntity<?>> status() {
+    public Mono<ResponseEntity<?>> status(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
-            if (!isGitRepo()) {
+            if (!isGitRepo(agentId)) {
                 return ResponseEntity.ok(Map.of("branch", "", "changes", List.of(), "ahead", 0, "behind", 0));
             }
-            String branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout().trim();
+            String branch = git(agentId, "rev-parse", "--abbrev-ref", "HEAD").stdout().trim();
             List<Map<String, Object>> changes = new ArrayList<>();
-            for (String line : git("status", "--porcelain").stdout().split("\\R")) {
+            for (String line : git(agentId, "status", "--porcelain").stdout().split("\\R")) {
                 if (line.length() < 4) continue;
                 String code = line.substring(0, 2);
                 String path = line.substring(3).trim();
@@ -51,11 +51,11 @@ public class GitCompatController {
     }
 
     @GetMapping("/branches")
-    public Mono<ResponseEntity<?>> branches() {
+    public Mono<ResponseEntity<?>> branches(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
-            if (!isGitRepo()) return ResponseEntity.ok(List.of());
+            if (!isGitRepo(agentId)) return ResponseEntity.ok(List.of());
             List<Map<String, Object>> result = new ArrayList<>();
-            for (String line : git("branch", "--all").stdout().split("\\R")) {
+            for (String line : git(agentId, "branch", "--all").stdout().split("\\R")) {
                 if (line.isBlank()) continue;
                 boolean current = line.startsWith("*");
                 String name = line.replaceFirst("^\\*\\s*", "").trim();
@@ -66,23 +66,25 @@ public class GitCompatController {
     }
 
     @PostMapping("/checkout")
-    public Mono<ResponseEntity<?>> checkout(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> checkout(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                            @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String branch = stringValue(body.get("branch"), "");
             if (branch.isBlank()) return ResponseEntity.badRequest().body(Map.of("detail", "branch is required"));
             boolean create = Boolean.TRUE.equals(body.get("create"));
-            GitResult result = create ? git("checkout", "-b", branch) : git("checkout", branch);
+            GitResult result = create ? git(agentId, "checkout", "-b", branch) : git(agentId, "checkout", branch);
             if (result.exitCode() != 0) return ResponseEntity.status(409).body(Map.of("detail", result.stderr()));
             return ResponseEntity.ok(Map.of("branch", branch));
         });
     }
 
     @GetMapping("/diff")
-    public Mono<ResponseEntity<?>> diff(@RequestParam(required = false) String path,
+    public Mono<ResponseEntity<?>> diff(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                        @RequestParam(required = false) String path,
                                         @RequestParam(defaultValue = "false") boolean staged,
                                         @RequestParam(defaultValue = "false") boolean untracked) {
         return Mono.fromCallable(() -> {
-            if (!isGitRepo()) return ResponseEntity.ok(Map.of("diff", ""));
+            if (!isGitRepo(agentId)) return ResponseEntity.ok(Map.of("diff", ""));
             List<String> args = new ArrayList<>();
             args.add("diff");
             if (staged) args.add("--staged");
@@ -90,36 +92,40 @@ public class GitCompatController {
                 args.add("--");
                 args.add(path);
             }
-            return ResponseEntity.ok(Map.of("diff", git(args.toArray(String[]::new)).stdout()));
+            return ResponseEntity.ok(Map.of("diff", git(agentId, args.toArray(String[]::new)).stdout()));
         });
     }
 
     @PostMapping("/stage")
-    public Mono<ResponseEntity<?>> stage(@RequestBody Map<String, Object> body) {
-        return runPathCommand("add", "staged", body);
+    public Mono<ResponseEntity<?>> stage(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                         @RequestBody Map<String, Object> body) {
+        return runPathCommand(agentId, "add", "staged", body);
     }
 
     @PostMapping("/unstage")
-    public Mono<ResponseEntity<?>> unstage(@RequestBody Map<String, Object> body) {
-        return runPathCommand("reset", "unstaged", body);
+    public Mono<ResponseEntity<?>> unstage(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                           @RequestBody Map<String, Object> body) {
+        return runPathCommand(agentId, "reset", "unstaged", body);
     }
 
     @PostMapping("/commit")
-    public Mono<ResponseEntity<?>> commit(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> commit(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                          @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String message = stringValue(body.get("message"), "");
             if (message.isBlank()) return ResponseEntity.badRequest().body(Map.of("detail", "message is required"));
-            GitResult result = git("commit", "-m", message);
+            GitResult result = git(agentId, "commit", "-m", message);
             return ResponseEntity.ok(Map.of("committed", result.exitCode() == 0, "output", result.stdout() + result.stderr()));
         });
     }
 
     @GetMapping("/log")
-    public Mono<ResponseEntity<?>> log(@RequestParam(defaultValue = "20") int limit) {
+    public Mono<ResponseEntity<?>> log(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                       @RequestParam(defaultValue = "20") int limit) {
         return Mono.fromCallable(() -> {
-            if (!isGitRepo()) return ResponseEntity.ok(List.of());
+            if (!isGitRepo(agentId)) return ResponseEntity.ok(List.of());
             String format = "%H%x1f%an%x1f%ad%x1f%s";
-            GitResult result = git("log", "--date=iso", "--pretty=format:" + format, "-" + Math.max(1, Math.min(limit, 100)));
+            GitResult result = git(agentId, "log", "--date=iso", "--pretty=format:" + format, "-" + Math.max(1, Math.min(limit, 100)));
             List<Map<String, Object>> commits = new ArrayList<>();
             for (String line : result.stdout().split("\\R")) {
                 String[] parts = line.split("\\x1f", 4);
@@ -137,8 +143,9 @@ public class GitCompatController {
     }
 
     @GetMapping("/commit-diff")
-    public Mono<ResponseEntity<?>> commitDiff(@RequestParam("commit_hash") String hash) {
-        return Mono.fromCallable(() -> ResponseEntity.ok(Map.of("hash", hash, "diff", isGitRepo() ? git("show", "--format=", hash).stdout() : "")));
+    public Mono<ResponseEntity<?>> commitDiff(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                              @RequestParam("commit_hash") String hash) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(Map.of("hash", hash, "diff", isGitRepo(agentId) ? git(agentId, "show", "--format=", hash).stdout() : "")));
     }
 
     @PostMapping("/revert")
@@ -146,7 +153,7 @@ public class GitCompatController {
         return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Revert is disabled in Java compatibility mode")));
     }
 
-    private Mono<ResponseEntity<?>> runPathCommand(String command, String responseKey, Map<String, Object> body) {
+    private Mono<ResponseEntity<?>> runPathCommand(String agentId, String command, String responseKey, Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             List<String> paths = stringList(body.get("paths"));
             List<String> args = new ArrayList<>();
@@ -158,23 +165,23 @@ public class GitCompatController {
             } else if ("add".equals(command)) {
                 args.add(".");
             }
-            GitResult result = git(args.toArray(String[]::new));
+            GitResult result = git(agentId, args.toArray(String[]::new));
             if (result.exitCode() != 0) return ResponseEntity.status(409).body(Map.of("detail", result.stderr()));
             return ResponseEntity.ok(Map.of(responseKey, paths));
         });
     }
 
-    private boolean isGitRepo() {
-        return git("rev-parse", "--is-inside-work-tree").exitCode() == 0;
+    private boolean isGitRepo(String agentId) {
+        return git(agentId, "rev-parse", "--is-inside-work-tree").exitCode() == 0;
     }
 
-    private GitResult git(String... args) {
+    private GitResult git(String agentId, String... args) {
         try {
             List<String> command = new ArrayList<>();
             command.add("git");
             command.addAll(Arrays.asList(args));
             Process process = new ProcessBuilder(command)
-                    .directory(workspaceDir().toFile())
+                    .directory(workspaceDir(agentId).toFile())
                     .redirectErrorStream(false)
                     .start();
             boolean finished = process.waitFor(Duration.ofSeconds(15).toMillis(), TimeUnit.MILLISECONDS);
@@ -190,8 +197,8 @@ public class GitCompatController {
         }
     }
 
-    private Path workspaceDir() {
-        return configManager.resolveWorkspaceDir("default");
+    private Path workspaceDir(String agentId) {
+        return configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId));
     }
 
     @SuppressWarnings("unchecked")

@@ -28,6 +28,7 @@ public class BuiltinSkillInitializer {
     private static final String RESOURCE_ROOT = "builtin-skills";
     private static final String RESOURCE_PATTERN = "classpath*:" + RESOURCE_ROOT + "/*/SKILL.md";
     private static final String ALL_RESOURCES_PATTERN = "classpath*:" + RESOURCE_ROOT + "/**/*";
+    private static final String VERSION_KEY = "builtin_skill_version:";
 
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
@@ -51,7 +52,7 @@ public class BuiltinSkillInitializer {
                     continue;
                 }
                 Path target = pool.resolve(skillName);
-                if (Files.exists(target.resolve("SKILL.md"))) {
+                if (Files.exists(target.resolve("SKILL.md")) && !needsUpdate(marker, target.resolve("SKILL.md"))) {
                     continue;
                 }
                 copySkill(skillName, target);
@@ -95,13 +96,34 @@ public class BuiltinSkillInitializer {
                 continue;
             }
             Path dst = target.resolve(relative);
-            if (Files.exists(dst)) {
+            if (Files.exists(dst) && !"SKILL.md".equals(relative)) {
                 continue;
             }
             Files.createDirectories(dst.getParent());
             try (InputStream in = resource.getInputStream()) {
-                Files.copy(in, dst);
+                Files.copy(in, dst, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
         }
+    }
+
+    private boolean needsUpdate(Resource source, Path target) throws IOException {
+        String current = Files.readString(target);
+        String next;
+        try (InputStream in = source.getInputStream()) {
+            next = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        String currentVersion = builtinVersion(current);
+        String nextVersion = builtinVersion(next);
+        return !nextVersion.isBlank() && !nextVersion.equals(currentVersion);
+    }
+
+    private String builtinVersion(String content) {
+        for (String line : content.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith(VERSION_KEY)) {
+                return trimmed.substring(VERSION_KEY.length()).trim().replace("\"", "");
+            }
+        }
+        return "";
     }
 }

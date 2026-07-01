@@ -4,6 +4,8 @@
 package com.melon.app.controller;
 
 import com.melon.core.config.ConfigManager;
+import com.melon.core.util.JsonUtils;
+import com.melon.tools.agent.DelegateExternalAgentTool;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.service.ApprovalService;
 import org.springframework.http.ResponseEntity;
@@ -378,26 +380,42 @@ public class FrontendCompatController {
 
     @GetMapping("/config/acp")
     public Mono<ResponseEntity<?>> getAcpConfig() {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", false, "agents", Map.of())));
+        return Mono.fromCallable(() -> ResponseEntity.ok(acpConfig()));
     }
 
     @PutMapping("/config/acp")
     public Mono<ResponseEntity<?>> updateAcpConfig(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("enabled", false)));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> config = acpConfig();
+            if (body != null) config.putAll(body);
+            JsonUtils.save(acpConfigFile(), config);
+            DelegateExternalAgentTool.setConfig(acpAgentConfigMap(config));
+            return ResponseEntity.ok(config);
+        });
     }
 
     @GetMapping("/config/acp/{agentName}")
     public Mono<ResponseEntity<?>> getAcpAgent(@PathVariable String agentName) {
-        return Mono.just(ResponseEntity.ok(Map.of("agent_name", agentName, "enabled", false)));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> agents = acpAgents(acpConfig());
+            Object config = agents.get(agentName);
+            return ResponseEntity.ok(config instanceof Map<?, ?> ? config : defaultAcpAgent(agentName));
+        });
     }
 
     @PutMapping("/config/acp/{agentName}")
     public Mono<ResponseEntity<?>> updateAcpAgent(@PathVariable String agentName, @RequestBody(required = false) Map<String, Object> body) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("agent_name", agentName);
-        if (body != null) result.putAll(body);
-        result.putIfAbsent("enabled", false);
-        return Mono.just(ResponseEntity.ok(result));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> config = acpConfig();
+            Map<String, Object> agents = acpAgents(config);
+            Map<String, Object> result = new LinkedHashMap<>(defaultAcpAgent(agentName));
+            if (body != null) result.putAll(body);
+            agents.put(agentName, result);
+            config.put("agents", agents);
+            JsonUtils.save(acpConfigFile(), config);
+            DelegateExternalAgentTool.setConfig(acpAgentConfigMap(config));
+            return ResponseEntity.ok(result);
+        });
     }
 
     @GetMapping("/coding-mode")
@@ -414,5 +432,75 @@ public class FrontendCompatController {
         if (value == null) return fallback;
         String text = String.valueOf(value);
         return text.isBlank() ? fallback : text;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> acpConfig() {
+        Map<String, Object> config = new LinkedHashMap<>(JsonUtils.loadAsMap(acpConfigFile()));
+        Map<String, Object> agents = acpAgents(config);
+        for (String key : List.of("opencode", "qwen_code", "claude_code", "codex")) {
+            agents.putIfAbsent(key, defaultAcpAgent(key));
+        }
+        config.put("agents", agents);
+        DelegateExternalAgentTool.setConfig(acpAgentConfigMap(config));
+        return config;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> acpAgents(Map<String, Object> config) {
+        Object raw = config.get("agents");
+        if (raw instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((k, v) -> result.put(String.valueOf(k), v));
+            return result;
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private Map<String, Object> defaultAcpAgent(String name) {
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("enabled", true);
+        if ("opencode".equals(name)) {
+            config.put("command", "opencode");
+            config.put("args", List.of("acp"));
+            config.put("tool_parse_mode", "update_detail");
+        } else if ("qwen_code".equals(name)) {
+            config.put("command", "qwen");
+            config.put("args", List.of("--acp"));
+            config.put("tool_parse_mode", "call_detail");
+        } else if ("claude_code".equals(name)) {
+            config.put("command", "npx");
+            config.put("args", List.of("-y", "@zed-industries/claude-agent-acp"));
+            config.put("tool_parse_mode", "update_detail");
+        } else if ("codex".equals(name)) {
+            config.put("command", "npx");
+            config.put("args", List.of("-y", "@zed-industries/codex-acp"));
+            config.put("tool_parse_mode", "call_detail");
+        } else {
+            config.put("command", "");
+            config.put("args", List.of());
+            config.put("tool_parse_mode", "call_title");
+        }
+        config.put("env", Map.of());
+        config.put("trusted", true);
+        config.put("stdio_buffer_limit_bytes", 50 * 1024 * 1024);
+        return config;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Map<String, Object>> acpAgentConfigMap(Map<String, Object> config) {
+        Map<String, Map<String, Object>> result = new LinkedHashMap<>();
+        for (var entry : acpAgents(config).entrySet()) {
+            if (entry.getValue() instanceof Map<?, ?> map) {
+                Map<String, Object> values = new LinkedHashMap<>();
+                map.forEach((k, v) -> values.put(String.valueOf(k), v));
+                result.put(entry.getKey(), values);
+            }
+        }
+        return result;
+    }
+
+    private java.nio.file.Path acpConfigFile() {
+        return configManager.resolveStateDir().resolve("acp.json");
     }
 }

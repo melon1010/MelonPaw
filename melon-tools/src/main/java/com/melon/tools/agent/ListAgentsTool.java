@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Lists all registered agents and their statuses.
@@ -25,6 +26,15 @@ public class ListAgentsTool extends ToolBase {
     private static final Logger log = LoggerFactory.getLogger(ListAgentsTool.class);
 
     private final MultiAgentManager agentManager;
+    private static Supplier<Map<String, ? extends Map<String, Object>>> agentListSupplier = Map::of;
+
+    public static void setAgentListSupplier(Supplier<Map<String, ? extends Map<String, Object>>> supplier) {
+        agentListSupplier = supplier == null ? Map::of : supplier;
+    }
+
+    public ListAgentsTool() {
+        this(null);
+    }
 
     public ListAgentsTool(MultiAgentManager agentManager) {
         super(ToolBase.builder()
@@ -52,7 +62,7 @@ public class ListAgentsTool extends ToolBase {
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
         try {
-            Map<String, ?> agents = agentManager.listAgents();
+            Map<String, ?> agents = agentManager != null ? agentManager.listAgents() : agentListSupplier.get();
             List<String> lines = new ArrayList<>();
             lines.add("Registered agents:");
             agents.forEach((id, info) -> {

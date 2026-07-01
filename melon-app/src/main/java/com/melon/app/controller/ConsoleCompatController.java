@@ -8,14 +8,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
 import com.melon.app.runner.ChatSpec;
-import com.melon.app.runner.SseEventMapper;
+import com.melon.app.runner.QwenPawEnvelopeMapper;
 import com.melon.app.service.ApprovalService;
-import io.agentscope.core.event.AgentEvent;
-import io.agentscope.core.event.ThinkingBlockDeltaEvent;
-import io.agentscope.core.event.TextBlockDeltaEvent;
-import io.agentscope.core.event.ToolCallStartEvent;
-import io.agentscope.core.event.ToolResultEndEvent;
-import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import com.melon.core.config.ConfigManager;
+import com.melon.core.util.SafePathUtil;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
@@ -24,10 +20,20 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.codec.multipart.FilePart;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.*;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * QwenPaw console-compatible endpoints used by the existing frontend.
@@ -40,15 +46,16 @@ public class ConsoleCompatController {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final AgentRunner agentRunner;
-    private final SseEventMapper sseEventMapper;
     private final ChatManager chatManager;
     private final ApprovalService approvalService;
+    private final ConfigManager configManager;
 
-    public ConsoleCompatController(AgentRunner agentRunner, SseEventMapper sseEventMapper, ChatManager chatManager, ApprovalService approvalService) {
+    public ConsoleCompatController(AgentRunner agentRunner, ChatManager chatManager, ApprovalService approvalService,
+                                   ConfigManager configManager) {
         this.agentRunner = agentRunner;
-        this.sseEventMapper = sseEventMapper;
         this.chatManager = chatManager;
         this.approvalService = approvalService;
+        this.configManager = configManager;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -59,9 +66,11 @@ public class ConsoleCompatController {
         String userId = stringValue(body.get("user_id"), headerUserId != null ? headerUserId : "default");
         String sessionId = stringValue(body.get("session_id"), "default");
         String channel = stringValue(body.get("channel"), "console");
-        String text = extractInputText(body.get("input"));
-        ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, titleFromText(text), null);
+        List<Map<String, Object>> frontendContext = frontendUserMessages(agentId, body.get("input"));
+        String text = modelFacingText(frontendContext);
+        ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, userId, channel, titleFromText(text));
         String chatId = chat.getId();
+        chatManager.setStatus(agentId, chatId, "running");
 
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("agent_id", agentId);
@@ -75,23 +84,22 @@ public class ConsoleCompatController {
         }
 
         List<Msg> msgs = List.of(new UserMessage(text));
-        chatManager.appendMessage(chatId, "user", text);
-        StreamState streamState = new StreamState();
+        QwenPawEnvelopeMapper envelope = new QwenPawEnvelopeMapper(sessionId);
         return agentRunner.stream(agentId, msgs, userId, sessionId, env)
                 .doOnSubscribe(s -> log.info("Console chat started: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId))
-                .flatMapIterable(event -> mapFrontendEvent(event, streamState))
+                .flatMapIterable(envelope::translate)
+                .concatWith(Flux.defer(() -> Flux.fromIterable(envelope.finish())))
+                .startWith(envelope.start())
                 .doFinally(signal -> {
-                    if (!streamState.assistantText.isEmpty()) {
-                        chatManager.appendMessage(chatId, "assistant", streamState.assistantText.toString());
-                    }
+                    chatManager.setStatus(agentId, chatId, "idle");
+                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, frontendContext);
                     log.info("Console chat finished: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal);
                 })
                 .onErrorResume(e -> {
                     log.error("Console chat failed: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId, e);
-                    return Flux.just(ServerSentEvent.<String>builder()
-                            .event("error")
-                            .data(frontendErrorJson(e))
-                            .build());
+                    chatManager.setStatus(agentId, chatId, "idle");
+                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, frontendContext);
+                    return Flux.fromIterable(envelope.error(e));
                 });
     }
 
@@ -151,140 +159,30 @@ public class ConsoleCompatController {
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<ResponseEntity<?>> uploadCompat() {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Console upload is not implemented yet")));
+    public Mono<ResponseEntity<?>> uploadCompat(
+            @RequestPart("file") FilePart file,
+            @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
+        String original = file.filename() != null ? file.filename() : "upload.bin";
+        String stored = UUID.randomUUID().toString().replace("-", "") + "_" + safeFileName(original);
+        Path mediaDir = configManager.resolveWorkspaceDir(agentId).resolve("media");
+        Path target = SafePathUtil.resolveSafe(mediaDir, stored);
+        return Mono.fromCallable(() -> {
+                    Files.createDirectories(mediaDir);
+                    return target;
+                })
+                .flatMap(path -> file.transferTo(path).thenReturn(path))
+                .map(path -> ResponseEntity.ok(Map.of(
+                        "url", path.toAbsolutePath().normalize().toString(),
+                        "file_name", original,
+                        "stored_name", stored,
+                        "size", path.toFile().length()
+                )));
     }
 
     private String stringValue(Object value, String fallback) {
         if (value == null) return fallback;
         String text = String.valueOf(value);
         return text.isBlank() ? fallback : text;
-    }
-
-    private List<ServerSentEvent<String>> mapFrontendEvent(AgentEvent event, StreamState state) {
-        return switch (event.getType()) {
-            case TEXT_BLOCK_DELTA -> {
-                String delta = ((TextBlockDeltaEvent) event).getDelta();
-                state.assistantText.append(delta);
-                yield withAssistantMessage(state, frontendTextDelta(state, delta, "in_progress"));
-            }
-            case THINKING_BLOCK_DELTA -> {
-                ThinkingBlockDeltaEvent thinking = (ThinkingBlockDeltaEvent) event;
-                yield withReasoningMessage(state, frontendThinkingDelta(state, thinking.getDelta(), "in_progress"));
-            }
-            case TOOL_CALL_START -> List.of(frontendToolCall((ToolCallStartEvent) event));
-            case TOOL_RESULT_TEXT_DELTA -> List.of(frontendToolResultDelta((ToolResultTextDeltaEvent) event));
-            case TOOL_RESULT_END -> List.of(frontendToolResult((ToolResultEndEvent) event));
-            case AGENT_END -> List.of(frontendCompletedResponse(state));
-            default -> List.of(frontendHeartbeat());
-        };
-    }
-
-    private List<ServerSentEvent<String>> withAssistantMessage(StreamState state, ServerSentEvent<String> event) {
-        if (state.assistantMessageCreated) {
-            return List.of(event);
-        }
-        state.assistantMessageCreated = true;
-        return List.of(frontendMessage(state.assistantMessageId, "message", "assistant", "in_progress"), event);
-    }
-
-    private List<ServerSentEvent<String>> withReasoningMessage(StreamState state, ServerSentEvent<String> event) {
-        if (state.reasoningMessageCreated) {
-            return List.of(event);
-        }
-        state.reasoningMessageCreated = true;
-        return List.of(frontendMessage(state.reasoningMessageId, "reasoning", "assistant", "in_progress"), event);
-    }
-
-    private ServerSentEvent<String> frontendMessage(String messageId, String type, String role, String status) {
-        return ServerSentEvent.<String>builder()
-                .event("message")
-                .data(toJson(runtimeMessage(messageId, type, role, status, List.of())))
-                .build();
-    }
-
-    private ServerSentEvent<String> frontendTextDelta(StreamState state, String text, String status) {
-        return frontendContent(state.assistantMessageId, "text", Map.of("text", text != null ? text : ""), true, status);
-    }
-
-    private ServerSentEvent<String> frontendThinkingDelta(StreamState state, String text, String status) {
-        return frontendContent(state.reasoningMessageId, "text", Map.of("text", text != null ? text : ""), true, status);
-    }
-
-    private ServerSentEvent<String> frontendContent(String messageId, String type, Map<String, Object> fields, boolean delta, String status) {
-        Map<String, Object> content = new LinkedHashMap<>();
-        content.put("object", "content");
-        content.put("msg_id", messageId);
-        content.put("type", type);
-        content.put("status", status);
-        content.put("delta", delta);
-        content.putAll(fields);
-        return ServerSentEvent.<String>builder().event("content").data(toJson(content)).build();
-    }
-
-    private ServerSentEvent<String> frontendCompletedResponse(StreamState state) {
-        long now = System.currentTimeMillis() / 1000;
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("id", state.responseId);
-        response.put("object", "response");
-        response.put("status", "completed");
-        response.put("created_at", now);
-        response.put("completed_at", now);
-        response.put("output", List.of());
-        response.put("error", null);
-        return ServerSentEvent.<String>builder().event("response").data(toJson(response)).build();
-    }
-
-    private ServerSentEvent<String> frontendToolCall(ToolCallStartEvent event) {
-        Map<String, Object> content = new LinkedHashMap<>();
-        content.put("type", "data");
-        content.put("status", "completed");
-        content.put("data", Map.of(
-                "name", event.getToolCallName(),
-                "call_id", event.getToolCallId(),
-                "arguments", Map.of()
-        ));
-        Map<String, Object> message = runtimeMessage(toolMessageId(event.getToolCallId()), "tool_call", "assistant", "in_progress", List.of(content));
-        return ServerSentEvent.<String>builder().event("tool_call").data(toJson(message)).build();
-    }
-
-    private ServerSentEvent<String> frontendToolResultDelta(ToolResultTextDeltaEvent event) {
-        return frontendContent(toolMessageId(event.getToolCallId()), "data", Map.of(
-                "data", Map.of(
-                        "name", event.getToolCallName(),
-                        "call_id", event.getToolCallId(),
-                        "output", Map.of("text", event.getDelta() != null ? event.getDelta() : "")
-                )
-        ), false, "in_progress");
-    }
-
-    private ServerSentEvent<String> frontendToolResult(ToolResultEndEvent event) {
-        Map<String, Object> content = new LinkedHashMap<>();
-        content.put("type", "data");
-        content.put("status", "completed");
-        content.put("data", Map.of(
-                "name", event.getToolCallName(),
-                "call_id", event.getToolCallId(),
-                "output", Map.of("state", event.getState().name())
-        ));
-        Map<String, Object> message = runtimeMessage(toolMessageId(event.getToolCallId()), "tool_call_output", "tool", "completed", List.of(content));
-        return ServerSentEvent.<String>builder().event("tool_result").data(toJson(message)).build();
-    }
-
-    private ServerSentEvent<String> frontendHeartbeat() {
-        Map<String, Object> message = runtimeMessage("message_" + UUID.randomUUID(), "heartbeat", "assistant", "completed", List.of());
-        return ServerSentEvent.<String>builder().event("heartbeat").data(toJson(message)).build();
-    }
-
-    private Map<String, Object> runtimeMessage(String id, String type, String role, String status, List<Map<String, Object>> content) {
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("id", id);
-        message.put("object", "message");
-        message.put("role", role);
-        message.put("type", type);
-        message.put("status", status);
-        message.put("content", content);
-        return message;
     }
 
     private String titleFromText(String text) {
@@ -335,26 +233,146 @@ public class ConsoleCompatController {
         return value != null ? List.of(value) : List.of();
     }
 
+    private List<Map<String, Object>> frontendUserMessages(String agentId, Object input) {
+        if (!(input instanceof List<?> list)) {
+            return List.of(frontendUserMessage(normalizeContentBlocks(agentId,
+                    List.of(Map.of("type", "text", "text", extractInputText(input))))));
+        }
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) continue;
+            if (!"user".equalsIgnoreCase(String.valueOf(map.get("role")))) continue;
+            messages.add(frontendUserMessage(normalizeContentBlocks(agentId, map.get("content"))));
+        }
+        return messages;
+    }
+
+    private Map<String, Object> frontendUserMessage(List<Map<String, Object>> content) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", "user_" + UUID.randomUUID().toString().replace("-", ""));
+        message.put("role", "user");
+        message.put("content", content);
+        message.put("metadata", Map.of());
+        message.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")));
+        return message;
+    }
+
+    private List<Map<String, Object>> normalizeContentBlocks(String agentId, Object content) {
+        if (content instanceof String text) return List.of(Map.of("type", "text", "text", text));
+        if (!(content instanceof List<?> blocks)) return List.of(Map.of("type", "text", "text", String.valueOf(content == null ? "" : content)));
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Object block : blocks) {
+            if (!(block instanceof Map<?, ?> raw)) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            raw.forEach((key, value) -> item.put(String.valueOf(key), value));
+            normalizeMediaSource(agentId, item);
+            normalized.add(item);
+            String path = uploadedAbsolutePath(item);
+            if (!path.isBlank() && !hasUploadNotice(normalized, path)) {
+                normalized.add(Map.of("type", "text", "text", "用户上传文件，已经下载到 " + path));
+            }
+        }
+        return normalized.isEmpty() ? List.of(Map.of("type", "text", "text", "")) : normalized;
+    }
+
+    private void normalizeMediaSource(String agentId, Map<String, Object> item) {
+        String type = String.valueOf(item.getOrDefault("type", "text"));
+        Object url = switch (type) {
+            case "image" -> item.get("image_url");
+            case "video" -> item.get("video_url");
+            case "audio" -> item.get("data");
+            case "file" -> item.get("file_url");
+            case "data" -> item.get("url");
+            default -> null;
+        };
+        if (item.get("source") instanceof Map<?, ?> sourceRaw) {
+            Map<String, Object> source = new LinkedHashMap<>();
+            sourceRaw.forEach((key, value) -> source.put(String.valueOf(key), value));
+            Object sourceUrl = source.get("url");
+            if (sourceUrl != null) {
+                source.put("url", toFileUrl(agentId, String.valueOf(sourceUrl)));
+            }
+            source.putIfAbsent("media_type", mediaType(type));
+            if (isMediaType(type)) {
+                item.put("type", "data");
+                item.putIfAbsent("name", item.getOrDefault("file_name", item.getOrDefault("filename", "file")));
+            }
+            item.put("source", source);
+            return;
+        }
+        if (url == null) return;
+        String fileUrl = toFileUrl(agentId, String.valueOf(url));
+        item.put("type", "data");
+        item.put("source", Map.of("type", "url", "url", fileUrl, "media_type", mediaType(type)));
+        item.putIfAbsent("name", item.getOrDefault("file_name", item.getOrDefault("filename", "file")));
+        if ("file".equals(type) && !item.containsKey("filename")) {
+            item.put("filename", String.valueOf(item.getOrDefault("file_name", "file")));
+        }
+    }
+
+    private String modelFacingText(List<Map<String, Object>> messages) {
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> message : messages) {
+            Object content = message.get("content");
+            if (!(content instanceof List<?> blocks)) continue;
+            for (Object block : blocks) {
+                if (block instanceof Map<?, ?> raw && "text".equals(String.valueOf(raw.get("type")))) {
+                    String text = stringValue(raw.get("text"), "");
+                    if (!text.isBlank()) parts.add(text);
+                }
+            }
+        }
+        return String.join("\n", parts).trim();
+    }
+
+    private String uploadedAbsolutePath(Map<String, Object> item) {
+        Object source = item.get("source");
+        if (!(source instanceof Map<?, ?> raw)) return "";
+        Object url = raw.get("url");
+        if (url == null) return "";
+        String text = String.valueOf(url);
+        if (!text.startsWith("file://")) return "";
+        try {
+            return Path.of(URI.create(text)).toString();
+        } catch (Exception ignored) {
+            return text.substring("file://".length());
+        }
+    }
+
+    private boolean hasUploadNotice(List<Map<String, Object>> blocks, String path) {
+        String notice = "用户上传文件，已经下载到 " + path;
+        return blocks.stream().anyMatch(block ->
+                "text".equals(String.valueOf(block.get("type"))) && notice.equals(String.valueOf(block.get("text"))));
+    }
+
+    private String toFileUrl(String agentId, String value) {
+        if (value == null || value.isBlank() || value.startsWith("file://") || value.startsWith("http://")
+                || value.startsWith("https://") || value.startsWith("data:")) {
+            return value;
+        }
+        Path path = Path.of(value);
+        if (!path.isAbsolute()) {
+            path = configManager.resolveWorkspaceDir(agentId).resolve("media").resolve(value);
+        }
+        return path.toAbsolutePath().normalize().toUri().toString();
+    }
+
+    private String mediaType(String type) {
+        return switch (type) {
+            case "image" -> "image/*";
+            case "video" -> "video/*";
+            case "audio" -> "audio/*";
+            default -> "application/octet-stream";
+        };
+    }
+
+    private boolean isMediaType(String type) {
+        return "file".equals(type) || "image".equals(type) || "audio".equals(type) || "video".equals(type);
+    }
+
     private String errorJson(Throwable e) {
         String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
         return "{\"detail\":\"" + message.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
-    }
-
-    private String frontendErrorJson(Throwable e) {
-        String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-        Map<String, Object> error = runtimeMessage("message_" + UUID.randomUUID(), "error", "assistant", "failed", List.of());
-        error.put("code", "CHAT_ERROR");
-        error.put("message", message);
-
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("id", "response_" + UUID.randomUUID());
-        response.put("object", "response");
-        response.put("status", "failed");
-        response.put("created_at", System.currentTimeMillis() / 1000);
-        response.put("completed_at", System.currentTimeMillis() / 1000);
-        response.put("output", List.of(error));
-        response.put("error", Map.of("code", "CHAT_ERROR", "message", message));
-        return toJson(response);
     }
 
     private String toJson(Object value) {
@@ -365,16 +383,9 @@ public class ConsoleCompatController {
         }
     }
 
-    private String toolMessageId(String toolCallId) {
-        return "tool_" + (toolCallId != null && !toolCallId.isBlank() ? toolCallId : UUID.randomUUID());
-    }
-
-    private static class StreamState {
-        final String responseId = "response_" + UUID.randomUUID();
-        final String assistantMessageId = "message_" + UUID.randomUUID();
-        final String reasoningMessageId = "reasoning_" + UUID.randomUUID();
-        final StringBuilder assistantText = new StringBuilder();
-        boolean assistantMessageCreated;
-        boolean reasoningMessageCreated;
+    private String safeFileName(String name) {
+        String cleaned = name.replace("..", "").replace("/", "").replace("\\", "").replace("\0", "");
+        cleaned = cleaned.replaceAll("[^a-zA-Z0-9_\\-.]", "_");
+        return cleaned.isBlank() ? "upload.bin" : cleaned;
     }
 }

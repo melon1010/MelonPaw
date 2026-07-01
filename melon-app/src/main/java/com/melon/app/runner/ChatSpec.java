@@ -7,14 +7,13 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * 聊天规格数据模型. 对应 Python app/runner/models.py 的 ChatSpec.
  * <p>
- * 描述一个聊天会话的元数据, 持久化到 ~/.melon/chats/ 目录.
+ * 描述一个聊天会话的元数据, 持久化到 workspace/chats.json.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ChatSpec {
@@ -22,11 +21,17 @@ public class ChatSpec {
     @JsonProperty("id")
     private String id;
 
-    @JsonProperty("agent_id")
-    private String agentId;
+    @JsonProperty("name")
+    private String name;
 
-    @JsonProperty("title")
-    private String title;
+    @JsonProperty("session_id")
+    private String sessionId;
+
+    @JsonProperty("user_id")
+    private String userId = "default";
+
+    @JsonProperty("channel")
+    private String channel = "console";
 
     @JsonProperty("created_at")
     private String createdAt;
@@ -34,25 +39,28 @@ public class ChatSpec {
     @JsonProperty("updated_at")
     private String updatedAt;
 
-    @JsonProperty("last_message")
-    private String lastMessage;
+    @JsonProperty("meta")
+    private Map<String, Object> meta = new LinkedHashMap<>();
 
-    @JsonProperty("session_id")
-    private String sessionId;
+    @JsonProperty("status")
+    private String status = "idle";
 
-    @JsonProperty("model")
-    private String model;
+    @JsonProperty("pinned")
+    private boolean pinned;
 
-    @JsonProperty("messages")
-    private List<Map<String, Object>> messages = new ArrayList<>();
+    @JsonProperty("source")
+    private String source = "chat";
+
+    @JsonProperty("agent_id")
+    private String agentId;
 
     public ChatSpec() {
     }
 
-    public ChatSpec(String id, String agentId, String title) {
+    public ChatSpec(String id, String agentId, String name) {
         this.id = id;
         this.agentId = agentId;
-        this.title = title;
+        this.name = name;
         String now = Instant.now().toString();
         this.createdAt = now;
         this.updatedAt = now;
@@ -74,12 +82,12 @@ public class ChatSpec {
         this.agentId = agentId;
     }
 
-    public String getTitle() {
-        return title;
+    public String getName() {
+        return name;
     }
 
-    public void setTitle(String title) {
-        this.title = title;
+    public void setName(String name) {
+        this.name = name;
     }
 
     public String getCreatedAt() {
@@ -98,14 +106,6 @@ public class ChatSpec {
         this.updatedAt = updatedAt;
     }
 
-    public String getLastMessage() {
-        return lastMessage;
-    }
-
-    public void setLastMessage(String lastMessage) {
-        this.lastMessage = lastMessage;
-    }
-
     public String getSessionId() {
         return sessionId;
     }
@@ -114,21 +114,53 @@ public class ChatSpec {
         this.sessionId = sessionId;
     }
 
-    public String getModel() {
-        return model;
+    public String getUserId() {
+        return userId;
     }
 
-    public void setModel(String model) {
-        this.model = model;
+    public void setUserId(String userId) {
+        this.userId = userId;
     }
 
-    public List<Map<String, Object>> getMessages() {
-        if (messages == null) messages = new ArrayList<>();
-        return messages;
+    public String getChannel() {
+        return channel;
     }
 
-    public void setMessages(List<Map<String, Object>> messages) {
-        this.messages = messages != null ? messages : new ArrayList<>();
+    public void setChannel(String channel) {
+        this.channel = channel;
+    }
+
+    public Map<String, Object> getMeta() {
+        if (meta == null) meta = new LinkedHashMap<>();
+        return meta;
+    }
+
+    public void setMeta(Map<String, Object> meta) {
+        this.meta = meta != null ? meta : new LinkedHashMap<>();
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public boolean isPinned() {
+        return pinned;
+    }
+
+    public void setPinned(boolean pinned) {
+        this.pinned = pinned;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 
     /**
@@ -140,6 +172,6 @@ public class ChatSpec {
 
     @Override
     public String toString() {
-        return "ChatSpec{id='" + id + "', agentId='" + agentId + "', title='" + title + "'}";
+        return "ChatSpec{id='" + id + "', agentId='" + agentId + "', name='" + name + "'}";
     }
 }

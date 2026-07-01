@@ -34,41 +34,43 @@ public class CodingProjectCompatController {
     }
 
     @GetMapping
-    public Mono<ResponseEntity<?>> getProject() {
-        return Mono.fromCallable(() -> ResponseEntity.ok(projectInfo(activePath())));
+    public Mono<ResponseEntity<?>> getProject(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(projectInfo(agentId, activePath(agentId))));
     }
 
     @PutMapping
-    public Mono<ResponseEntity<?>> setProject(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> setProject(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                              @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String path = body == null || body.get("path") == null ? "" : String.valueOf(body.get("path"));
-            Path active = path.isBlank() ? defaultWorkspace() : expand(path);
+            Path active = path.isBlank() ? defaultWorkspace(agentId) : expand(path);
             Files.createDirectories(active);
-            JsonUtils.save(stateFile(), Map.of("path", active.toString()));
-            return ResponseEntity.ok(projectInfo(active));
+            JsonUtils.save(stateFile(agentId), Map.of("path", active.toString()));
+            return ResponseEntity.ok(projectInfo(agentId, active));
         });
     }
 
     @PostMapping("/create")
-    public Mono<ResponseEntity<?>> createProject(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> createProject(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                 @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String name = sanitizeName(String.valueOf(body.getOrDefault("name", "project")));
-            Path project = projectsDir().resolve(name).normalize();
+            Path project = projectsDir(agentId).resolve(name).normalize();
             Files.createDirectories(project);
             if (!Files.exists(project.resolve(".git"))) {
                 run(project, "git", "init");
             }
-            JsonUtils.save(stateFile(), Map.of("path", project.toString()));
+            JsonUtils.save(stateFile(agentId), Map.of("path", project.toString()));
             return ResponseEntity.ok(Map.of("path", project.toString(), "name", project.getFileName().toString()));
         });
     }
 
     @GetMapping("/list")
-    public Mono<ResponseEntity<?>> listProjects() {
+    public Mono<ResponseEntity<?>> listProjects(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
-            Path projectsDir = projectsDir();
+            Path projectsDir = projectsDir(agentId);
             Files.createDirectories(projectsDir);
-            Path active = activePath();
+            Path active = activePath(agentId);
             List<Map<String, Object>> result = new ArrayList<>();
             try (var stream = Files.list(projectsDir)) {
                 stream.filter(Files::isDirectory).forEach(path -> result.add(Map.of(
@@ -83,13 +85,14 @@ public class CodingProjectCompatController {
     }
 
     @PostMapping("/import-local")
-    public Mono<ResponseEntity<?>> importLocal(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> importLocal(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                               @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String source = String.valueOf(body.getOrDefault("path", ""));
             if (source.isBlank()) return ResponseEntity.badRequest().body(Map.of("detail", "path is required"));
             Path sourcePath = expand(source);
             if (!Files.isDirectory(sourcePath)) return ResponseEntity.status(409).body(Map.of("detail", "path is not a directory"));
-            JsonUtils.save(stateFile(), Map.of("path", sourcePath.toString()));
+            JsonUtils.save(stateFile(agentId), Map.of("path", sourcePath.toString()));
             return ResponseEntity.ok(Map.of("path", sourcePath.toString(), "name", sourcePath.getFileName().toString()));
         });
     }
@@ -126,14 +129,15 @@ public class CodingProjectCompatController {
     }
 
     @PostMapping(value = "/clone", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<Map<String, Object>>> cloneProject(@RequestBody Map<String, Object> body) {
+    public Flux<ServerSentEvent<Map<String, Object>>> cloneProject(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                                    @RequestBody Map<String, Object> body) {
         return Flux.defer(() -> {
             String url = String.valueOf(body.getOrDefault("url", ""));
             if (url.isBlank()) {
                 return Flux.just(ServerSentEvent.builder(Map.<String, Object>of("type", "error", "message", "url is required")).build());
             }
             String name = sanitizeName(String.valueOf(body.getOrDefault("name", url.substring(url.lastIndexOf('/') + 1).replaceFirst("\\.git$", ""))));
-            Path projectsDir = projectsDir();
+            Path projectsDir = projectsDir(agentId);
             Path target = projectsDir.resolve(name).normalize();
             try {
                 Files.createDirectories(projectsDir);
@@ -149,7 +153,7 @@ public class CodingProjectCompatController {
                 if (process.exitValue() != 0) {
                     return Flux.just(ServerSentEvent.builder(Map.<String, Object>of("type", "error", "message", output)).build());
                 }
-                JsonUtils.save(stateFile(), Map.of("path", target.toString()));
+                JsonUtils.save(stateFile(agentId), Map.of("path", target.toString()));
                 return Flux.just(
                         ServerSentEvent.builder(Map.<String, Object>of("type", "log", "message", output)).build(),
                         ServerSentEvent.builder(Map.<String, Object>of("type", "done", "path", target.toString(), "name", name)).build()
@@ -160,32 +164,32 @@ public class CodingProjectCompatController {
         });
     }
 
-    private Map<String, Object> projectInfo(Path path) {
+    private Map<String, Object> projectInfo(String agentId, Path path) {
         Map<String, Object> info = new LinkedHashMap<>();
         info.put("path", path.toString());
         info.put("name", path.getFileName() != null ? path.getFileName().toString() : path.toString());
-        info.put("is_workspace_default", path.equals(defaultWorkspace()));
-        info.put("workspace_dir", defaultWorkspace().toString());
+        info.put("is_workspace_default", path.equals(defaultWorkspace(agentId)));
+        info.put("workspace_dir", defaultWorkspace(agentId).toString());
         info.put("exists", Files.exists(path));
         return info;
     }
 
-    private Path activePath() {
-        Object raw = JsonUtils.loadAsMap(stateFile()).get("path");
+    private Path activePath(String agentId) {
+        Object raw = JsonUtils.loadAsMap(stateFile(agentId)).get("path");
         if (raw instanceof String path && !path.isBlank()) return expand(path);
-        return defaultWorkspace();
+        return defaultWorkspace(agentId);
     }
 
-    private Path defaultWorkspace() {
-        return configManager.resolveWorkspaceDir("default");
+    private Path defaultWorkspace(String agentId) {
+        return configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId));
     }
 
-    private Path stateFile() {
-        return configManager.resolveHomeDir().resolve("coding-project.json");
+    private Path stateFile(String agentId) {
+        return configManager.resolveStateDir().resolve("coding-projects").resolve(AgentRequestSupport.agentId(agentId) + ".json");
     }
 
-    private Path projectsDir() {
-        return configManager.resolveHomeDir().resolve("coding_projects");
+    private Path projectsDir(String agentId) {
+        return configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId)).resolve("coding_projects");
     }
 
     private Path expand(String path) {

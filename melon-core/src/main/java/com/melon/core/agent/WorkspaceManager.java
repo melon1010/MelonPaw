@@ -12,6 +12,7 @@ import java.io.InputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -27,7 +28,8 @@ public class WorkspaceManager {
             "AGENTS.md", "BOOTSTRAP.md", "HEARTBEAT.md", "MEMORY.md", "PROFILE.md", "SOUL.md"
     );
     private static final List<String> WORKSPACE_DIRS = List.of(
-            "memory", "skills", "knowledge", "agents"
+            "sessions/console", "media", "tool_results", "skills", "memory",
+            "resource", "mem_session", "mem_metadata", "digest", "drivers", ".mcp", "browser"
     );
 
     /**
@@ -69,7 +71,9 @@ public class WorkspaceManager {
             }
             createJsonIfMissing(dir.resolve("chats.json"), Map.of("version", 1, "chats", List.of()));
             createJsonIfMissing(dir.resolve("jobs.json"), Map.of("version", 1, "jobs", List.of()));
+            createJsonIfMissing(dir.resolve("skill.json"), Map.of("version", 1, "skills", List.of()));
             createJsonIfMissing(dir.resolve("agent.json"), Map.of("version", 1));
+            createIfMissing(dir.resolve("credentials.yaml"), "");
         } catch (IOException e) {
             log.error("Failed to init workspace at {}", dir, e);
         }
@@ -92,12 +96,30 @@ public class WorkspaceManager {
         }
     }
 
+    public boolean deleteWorkspaceIfUnderRoot(Path workspaceDir, Path workspaceRoot) throws IOException {
+        Path root = workspaceRoot.toAbsolutePath().normalize();
+        Path target = workspaceDir.toAbsolutePath().normalize();
+        if (!target.startsWith(root) || target.equals(root) || !Files.exists(target)) {
+            return false;
+        }
+        try (var stream = Files.walk(target)) {
+            for (Path path : stream.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
+        return true;
+    }
+
     private void createMdIfMissing(Path dir, String filename) throws IOException {
         Path target = dir.resolve(filename);
-        if (Files.exists(target)) {
-            return;
-        }
         try (InputStream in = WorkspaceManager.class.getClassLoader().getResourceAsStream("agents/" + filename)) {
+            if (Files.exists(target)) {
+                if (in != null && isLegacyBuiltinMd(filename, Files.readString(target))) {
+                    Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    log.info("Migrated legacy workspace file {}", target);
+                }
+                return;
+            }
             if (in != null) {
                 Files.copy(in, target);
             } else if ("AGENTS.md".equals(filename)) {
@@ -109,11 +131,32 @@ public class WorkspaceManager {
         }
     }
 
+    private boolean isLegacyBuiltinMd(String filename, String content) {
+        String firstLine = content == null ? "" : content.lines().findFirst().orElse("");
+        return switch (filename) {
+            case "AGENTS.md" -> "# Melon Agent Instructions".equals(firstLine);
+            case "BOOTSTRAP.md" -> "# Melon Bootstrap".equals(firstLine);
+            case "HEARTBEAT.md" -> "# Melon Heartbeat".equals(firstLine);
+            case "MEMORY.md" -> "# Melon Memory System".equals(firstLine);
+            case "PROFILE.md" -> "# Melon Agent Profile".equals(firstLine);
+            case "SOUL.md" -> "# Melon Personality".equals(firstLine);
+            default -> false;
+        };
+    }
+
     private void createJsonIfMissing(Path path, Map<String, Object> value) throws IOException {
         if (Files.exists(path)) {
             return;
         }
         JSON.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), value);
+        log.info("Created workspace file {}", path);
+    }
+
+    private void createIfMissing(Path path, String value) throws IOException {
+        if (Files.exists(path)) {
+            return;
+        }
+        Files.writeString(path, value);
         log.info("Created workspace file {}", path);
     }
 }

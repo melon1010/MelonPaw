@@ -293,7 +293,7 @@ public class ModelsCompatController {
         if ("ollama".equals(providerId)) {
             return true;
         }
-        return hasText(stringValue(config.get("api_key"))) || providerManager.testConnection(providerId);
+        return hasText(stringValue(config.get("api_key"))) || providerManager.isConfigured(providerId);
     }
 
     private String stringValue(Object value) {

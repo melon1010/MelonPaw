@@ -49,6 +49,10 @@ public class ExecuteShellCommandTool extends ToolBase {
                             "cwd": {
                               "type": "string",
                               "description": "Working directory for the command"
+                            },
+                            "working_directory": {
+                              "type": "string",
+                              "description": "Alias for cwd, accepted for compatibility"
                             }
                           },
                           "required": ["command"]
@@ -69,7 +73,7 @@ public class ExecuteShellCommandTool extends ToolBase {
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
         String command = (String) param.getInput().get("command");
         double timeout = ((Number) param.getInput().getOrDefault("timeout", 60.0)).doubleValue();
-        String cwd = (String) param.getInput().get("cwd");
+        String cwd = (String) param.getInput().getOrDefault("cwd", param.getInput().get("working_directory"));
 
         // 自杀防护
         if (isDangerousSelfKill(command)) {

@@ -32,7 +32,7 @@ public class MultiAgentManager {
 
     public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager) {
         this.configManager = configManager;
-        this.agentFactory = new MelonAgentFactory();
+        this.agentFactory = new MelonAgentFactory(this);
         this.workspaceManager = workspaceManager;
     }
 
@@ -67,6 +67,9 @@ public class MultiAgentManager {
             if (config == null) {
                 throw new IllegalArgumentException("No agent config found for: " + id);
             }
+            if (!config.isEnabled()) {
+                throw new IllegalStateException("Agent is disabled: " + id);
+            }
             Path workspaceDir = configManager.resolveWorkspaceDir(id);
             workspaceManager.initWorkspace(workspaceDir);
             workspaceManager.writeAgentJson(workspaceDir, id, config);
@@ -98,6 +101,11 @@ public class MultiAgentManager {
      * 启动指定 Agent.
      */
     public void start(String agentId) {
+        AgentConfig config = configManager.getConfig().getAgents().get(agentId);
+        if (config != null && !config.isEnabled()) {
+            log.info("Agent {} is disabled, skip start", agentId);
+            return;
+        }
         getOrCreate(agentId);
         running.add(agentId);
         log.info("Agent {} started", agentId);
@@ -132,6 +140,7 @@ public class MultiAgentManager {
             Map<String, Object> info = new LinkedHashMap<>();
             info.put("name", config.getName() != null ? config.getName() : id);
             info.put("active_model", config.getActiveModel());
+            info.put("enabled", config.isEnabled());
             info.put("running", isRunning(id));
             result.put(id, info);
         }
@@ -151,6 +160,10 @@ public class MultiAgentManager {
     public void startAll() {
         for (String agentId : configManager.getConfig().getAgents().keySet()) {
             try {
+                AgentConfig config = configManager.getConfig().getAgents().get(agentId);
+                if (config != null && !config.isEnabled()) {
+                    continue;
+                }
                 start(agentId);
             } catch (Exception e) {
                 log.error("Failed to start agent {}", agentId, e);

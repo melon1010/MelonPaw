@@ -117,14 +117,28 @@ public class ProviderManager {
             return false;
         }
 
+        boolean available = isConfigured(providerId);
+        if (available) {
+            log.info("Provider {} connection test: PASS ({} is configured)", providerId, envVar);
+        } else {
+            log.debug("Provider {} connection test: FAIL ({} is not configured)", providerId, envVar);
+        }
+        return available;
+    }
+
+    public boolean isConfigured(String providerId) {
+        if (providerId == null || providerId.isBlank()) {
+            return false;
+        }
+        if ("ollama".equals(providerId)) {
+            return true;
+        }
+        String envVar = API_KEY_ENV_VARS.get(providerId);
         String apiKey = configuredApiKey(providerId);
         if (apiKey == null || apiKey.isBlank()) {
-            apiKey = System.getenv(envVar);
+            apiKey = envVar != null ? System.getenv(envVar) : "";
         }
-        boolean available = apiKey != null && !apiKey.isBlank();
-        log.info("Provider {} connection test: {} (env var {} is {})",
-                providerId, available ? "PASS" : "FAIL", envVar, available ? "set" : "not set");
-        return available;
+        return apiKey != null && !apiKey.isBlank();
     }
 
     /**

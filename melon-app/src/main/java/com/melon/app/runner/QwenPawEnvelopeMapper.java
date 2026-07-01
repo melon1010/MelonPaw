@@ -1,0 +1,510 @@
+/**
+ * @author melon
+ */
+package com.melon.app.runner;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.DataBlockDeltaEvent;
+import io.agentscope.core.event.DataBlockEndEvent;
+import io.agentscope.core.event.DataBlockStartEvent;
+import io.agentscope.core.event.ModelCallEndEvent;
+import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.TextBlockEndEvent;
+import io.agentscope.core.event.TextBlockStartEvent;
+import io.agentscope.core.event.ThinkingBlockDeltaEvent;
+import io.agentscope.core.event.ThinkingBlockEndEvent;
+import io.agentscope.core.event.ThinkingBlockStartEvent;
+import io.agentscope.core.event.ToolCallDeltaEvent;
+import io.agentscope.core.event.ToolCallEndEvent;
+import io.agentscope.core.event.ToolCallStartEvent;
+import io.agentscope.core.event.ToolResultDataDeltaEvent;
+import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.event.ToolResultStartEvent;
+import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.agentscope.core.message.ContentBlock;
+import io.agentscope.core.model.ChatUsage;
+import org.springframework.http.codec.ServerSentEvent;
+
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * AgentScope Java events -> QwenPaw Python-compatible streaming envelope.
+ *
+ * <p>This mirrors qwenpaw.runtime.envelope.Envelope closely enough for the
+ * copied frontend's @agentscope-ai/chat renderer: messages are split by text,
+ * reasoning, tool call and tool result, and tool payloads keep the Python
+ * FunctionCall / FunctionCallOutput data shape.</p>
+ */
+public class QwenPawEnvelopeMapper {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    private final String responseId = "response_" + UUID.randomUUID().toString().replace("-", "");
+    private final String sessionId;
+    private final long createdEpochSeconds = System.currentTimeMillis() / 1000;
+    private final String createdAt = OffsetDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+
+    private int sequenceNumber;
+    private String textMessageId = newMessageId();
+    private boolean textMessageStarted;
+    private final StringBuilder visibleAssistantText = new StringBuilder();
+    private final List<Map<String, Object>> textContents = new ArrayList<>();
+    private final Map<String, TextBlockState> textBlocks = new LinkedHashMap<>();
+    private final Map<String, ReasoningState> reasoningBlocks = new HashMap<>();
+    private final Map<String, ToolState> toolStates = new HashMap<>();
+    private final Map<String, DataBlockState> dataBlocks = new HashMap<>();
+    private final List<Map<String, Object>> outputMessages = new ArrayList<>();
+    private Map<String, Object> usage;
+    private boolean finalized;
+
+    public QwenPawEnvelopeMapper(String sessionId) {
+        this.sessionId = sessionId != null ? sessionId : "";
+    }
+
+    public List<ServerSentEvent<String>> start() {
+        Map<String, Object> response = response("created");
+        Map<String, Object> inProgress = new LinkedHashMap<>(response);
+        inProgress.put("status", "in_progress");
+        return List.of(sse("response", tag(response)), sse("response", tag(inProgress)));
+    }
+
+    public List<ServerSentEvent<String>> translate(AgentEvent event) {
+        return switch (event.getType()) {
+            case TEXT_BLOCK_START -> textStart((TextBlockStartEvent) event);
+            case TEXT_BLOCK_DELTA -> textDelta((TextBlockDeltaEvent) event);
+            case TEXT_BLOCK_END -> textEnd((TextBlockEndEvent) event);
+            case THINKING_BLOCK_START -> thinkingStart((ThinkingBlockStartEvent) event);
+            case THINKING_BLOCK_DELTA -> thinkingDelta((ThinkingBlockDeltaEvent) event);
+            case THINKING_BLOCK_END -> thinkingEnd((ThinkingBlockEndEvent) event);
+            case TOOL_CALL_START -> toolCallStart((ToolCallStartEvent) event);
+            case TOOL_CALL_DELTA -> toolCallDelta((ToolCallDeltaEvent) event);
+            case TOOL_CALL_END -> toolCallEnd((ToolCallEndEvent) event);
+            case TOOL_RESULT_START -> toolResultStart((ToolResultStartEvent) event);
+            case TOOL_RESULT_TEXT_DELTA -> toolResultTextDelta((ToolResultTextDeltaEvent) event);
+            case TOOL_RESULT_DATA_DELTA -> toolResultDataDelta((ToolResultDataDeltaEvent) event);
+            case TOOL_RESULT_END -> toolResultEnd((ToolResultEndEvent) event);
+            case DATA_BLOCK_START -> dataStart((DataBlockStartEvent) event);
+            case DATA_BLOCK_DELTA -> dataDelta((DataBlockDeltaEvent) event);
+            case DATA_BLOCK_END -> dataEnd((DataBlockEndEvent) event);
+            case MODEL_CALL_END -> modelCallEnd((ModelCallEndEvent) event);
+            case AGENT_END -> finish();
+            default -> List.of();
+        };
+    }
+
+    public List<ServerSentEvent<String>> finish() {
+        if (finalized) return List.of();
+        finalized = true;
+        List<ServerSentEvent<String>> events = new ArrayList<>();
+        events.addAll(finalizeTextMessage());
+        Map<String, Object> completed = response("completed");
+        completed.put("completed_at", System.currentTimeMillis() / 1000);
+        completed.put("output", new ArrayList<>(outputMessages));
+        if (usage != null) completed.put("usage", usage);
+        events.add(sse("response", tag(completed)));
+        return events;
+    }
+
+    public List<ServerSentEvent<String>> error(Throwable e) {
+        String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        List<ServerSentEvent<String>> events = new ArrayList<>();
+        events.addAll(finalizeTextMessage());
+        Map<String, Object> failed = response("failed");
+        failed.put("completed_at", System.currentTimeMillis() / 1000);
+        failed.put("output", new ArrayList<>(outputMessages));
+        failed.put("error", Map.of("code", "CHAT_ERROR", "message", message));
+        events.add(sse("response", tag(failed)));
+        finalized = true;
+        return events;
+    }
+
+    public String visibleAssistantText() {
+        return visibleAssistantText.toString();
+    }
+
+    private List<ServerSentEvent<String>> textStart(TextBlockStartEvent event) {
+        List<ServerSentEvent<String>> events = new ArrayList<>();
+        ensureTextMessage(events);
+        String blockId = blockId(event.getBlockId(), "text");
+        textBlocks.putIfAbsent(blockId, new TextBlockState(textBlocks.size()));
+        return events;
+    }
+
+    private List<ServerSentEvent<String>> textDelta(TextBlockDeltaEvent event) {
+        String delta = event.getDelta() != null ? event.getDelta() : "";
+        if (delta.isEmpty()) return List.of();
+        List<ServerSentEvent<String>> events = new ArrayList<>();
+        ensureTextMessage(events);
+        String blockId = blockId(event.getBlockId(), "text");
+        TextBlockState state = textBlocks.computeIfAbsent(blockId, ignored -> new TextBlockState(textBlocks.size()));
+        state.text.append(delta);
+        visibleAssistantText.append(delta);
+        events.add(contentEvent(textMessageId, "text", Map.of("text", delta), true, "in_progress", state.index));
+        return events;
+    }
+
+    private List<ServerSentEvent<String>> textEnd(TextBlockEndEvent event) {
+        String blockId = blockId(event.getBlockId(), "text");
+        TextBlockState state = textBlocks.get(blockId);
+        if (state == null) return List.of();
+        String text = state.text.toString();
+        Map<String, Object> finalContent = textContent(text, false, state.index);
+        if (!state.completed && !text.isEmpty()) {
+            state.completed = true;
+            textContents.add(finalContent);
+        }
+        return List.of(contentEvent(textMessageId, "text", Map.of("text", text), false, "completed", state.index));
+    }
+
+    private List<ServerSentEvent<String>> thinkingStart(ThinkingBlockStartEvent event) {
+        String blockId = blockId(event.getBlockId(), "reasoning");
+        ReasoningState state = reasoningBlocks.computeIfAbsent(blockId, ignored -> new ReasoningState());
+        state.started = true;
+        return List.of(messageEvent(state.messageId, "reasoning", "assistant", "in_progress", List.of()));
+    }
+
+    private List<ServerSentEvent<String>> thinkingDelta(ThinkingBlockDeltaEvent event) {
+        String blockId = blockId(event.getBlockId(), "reasoning");
+        ReasoningState state = reasoningBlocks.computeIfAbsent(blockId, ignored -> new ReasoningState());
+        List<ServerSentEvent<String>> events = new ArrayList<>();
+        if (!state.started) {
+            state.started = true;
+            events.add(messageEvent(state.messageId, "reasoning", "assistant", "in_progress", List.of()));
+        }
+        String delta = event.getDelta() != null ? event.getDelta() : "";
+        state.text.append(delta);
+        events.add(contentEvent(state.messageId, "text", Map.of("text", delta), true, "in_progress", 0));
+        return events;
+    }
+
+    private List<ServerSentEvent<String>> thinkingEnd(ThinkingBlockEndEvent event) {
+        String blockId = blockId(event.getBlockId(), "reasoning");
+        ReasoningState state = reasoningBlocks.get(blockId);
+        if (state == null) return List.of();
+        String text = state.text.toString();
+        Map<String, Object> finalContent = textContent(text, false, 0);
+        reasoningBlocks.remove(blockId);
+        return List.of(
+                contentEvent(state.messageId, "text", Map.of("text", text), false, "completed", 0),
+                completedMessageEvent(state.messageId, "reasoning", "assistant", List.of(finalContent))
+        );
+    }
+
+    private List<ServerSentEvent<String>> toolCallStart(ToolCallStartEvent event) {
+        List<ServerSentEvent<String>> events = new ArrayList<>(finalizeTextMessage());
+        String callId = safeId(event.getToolCallId());
+        String toolName = FrontendToolCompat.displayToolName(event.getToolCallName());
+        ToolState state = new ToolState(callId, toolName, event.getToolCallName());
+        toolStates.put(callId, state);
+        Map<String, Object> stub = dataContent(functionCall(callId, toolName, ""), false, 0);
+        events.add(messageEvent(state.callMessageId, "plugin_call", "assistant", "in_progress", List.of()));
+        events.add(contentEvent(state.callMessageId, "data", Map.of("data", stub.get("data")), false, "in_progress", 0));
+        return events;
+    }
+
+    private List<ServerSentEvent<String>> toolCallDelta(ToolCallDeltaEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        state.arguments.append(event.getDelta() != null ? event.getDelta() : "");
+        Map<String, Object> data = functionCall(callId, state.toolName, state.arguments.toString());
+        return List.of(contentEvent(state.callMessageId, "data", Map.of("data", data), false, "in_progress", 0));
+    }
+
+    private List<ServerSentEvent<String>> toolCallEnd(ToolCallEndEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        String args = FrontendToolCompat.argumentsJson(state.actualToolName, state.arguments.toString());
+        Map<String, Object> finalContent = dataContent(functionCall(callId, state.toolName, args), false, 0);
+        return List.of(
+                contentEvent(state.callMessageId, "data", Map.of("data", finalContent.get("data")), false, "completed", 0),
+                completedMessageEvent(state.callMessageId, "plugin_call", "assistant", List.of(finalContent))
+        );
+    }
+
+    private List<ServerSentEvent<String>> toolResultStart(ToolResultStartEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        Map<String, Object> stub = dataContent(functionCallOutput(callId, state.toolName, ""), false, 0);
+        return List.of(
+                messageEvent(state.resultMessageId, "plugin_call_output", "tool", "in_progress", List.of()),
+                contentEvent(state.resultMessageId, "data", Map.of("data", stub.get("data")), false, "in_progress", 0)
+        );
+    }
+
+    private List<ServerSentEvent<String>> toolResultTextDelta(ToolResultTextDeltaEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        state.outputText.append(event.getDelta() != null ? event.getDelta() : "");
+        Map<String, Object> data = functionCallOutput(callId, state.toolName, buildToolOutput(state));
+        return List.of(contentEvent(state.resultMessageId, "data", Map.of("data", data), false, "in_progress", 0));
+    }
+
+    private List<ServerSentEvent<String>> toolResultDataDelta(ToolResultDataDeltaEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        ContentBlock block = event.getData();
+        if (block != null) {
+            state.outputBlocks.add(JSON.convertValue(block, Map.class));
+        }
+        Map<String, Object> data = functionCallOutput(callId, state.toolName, buildToolOutput(state));
+        return List.of(contentEvent(state.resultMessageId, "data", Map.of("data", data), false, "in_progress", 0));
+    }
+
+    private List<ServerSentEvent<String>> toolResultEnd(ToolResultEndEvent event) {
+        String callId = safeId(event.getToolCallId());
+        ToolState state = toolStates.computeIfAbsent(callId,
+                ignored -> new ToolState(callId, FrontendToolCompat.displayToolName(event.getToolCallName()), event.getToolCallName()));
+        Map<String, Object> data = functionCallOutput(callId, state.toolName, buildToolOutput(state));
+        if (event.getState() != null) data.put("state", event.getState().name().toLowerCase());
+        Map<String, Object> finalContent = dataContent(data, false, 0);
+        return List.of(
+                contentEvent(state.resultMessageId, "data", Map.of("data", data), false, "completed", 0),
+                completedMessageEvent(state.resultMessageId, "plugin_call_output", "tool", List.of(finalContent))
+        );
+    }
+
+    private List<ServerSentEvent<String>> dataStart(DataBlockStartEvent event) {
+        dataBlocks.putIfAbsent(blockId(event.getBlockId(), "data"), new DataBlockState());
+        return List.of();
+    }
+
+    private List<ServerSentEvent<String>> dataDelta(DataBlockDeltaEvent event) {
+        DataBlockState state = dataBlocks.computeIfAbsent(blockId(event.getBlockId(), "data"), ignored -> new DataBlockState());
+        state.data.append(event.getDelta() != null ? event.getDelta() : "");
+        return List.of();
+    }
+
+    private List<ServerSentEvent<String>> dataEnd(DataBlockEndEvent event) {
+        // AgentScope Java's data block event does not expose media type here;
+        // keep parity for text/tool rendering and ignore opaque binary chunks.
+        dataBlocks.remove(blockId(event.getBlockId(), "data"));
+        return List.of();
+    }
+
+    private List<ServerSentEvent<String>> modelCallEnd(ModelCallEndEvent event) {
+        ChatUsage chatUsage = event.getUsage();
+        if (chatUsage != null) {
+            usage = new LinkedHashMap<>();
+            usage.put("input_tokens", chatUsage.getInputTokens());
+            usage.put("output_tokens", chatUsage.getOutputTokens());
+            usage.put("total_tokens", chatUsage.getTotalTokens());
+        }
+        return List.of();
+    }
+
+    private void ensureTextMessage(List<ServerSentEvent<String>> events) {
+        if (textMessageStarted) return;
+        textMessageStarted = true;
+        events.add(messageEvent(textMessageId, "message", "assistant", "in_progress", List.of()));
+    }
+
+    private List<ServerSentEvent<String>> finalizeTextMessage() {
+        if (!textMessageStarted) return List.of();
+        for (TextBlockState state : textBlocks.values()) {
+            if (!state.completed) {
+                state.completed = true;
+                if (!state.text.isEmpty()) {
+                    textContents.add(textContent(state.text.toString(), false, state.index));
+                }
+            }
+        }
+        if (textContents.isEmpty()) {
+            textMessageId = newMessageId();
+            textMessageStarted = false;
+            textBlocks.clear();
+            return List.of();
+        }
+        List<ServerSentEvent<String>> events = List.of(completedMessageEvent(textMessageId, "message", "assistant", new ArrayList<>(textContents)));
+        textMessageId = newMessageId();
+        textMessageStarted = false;
+        textContents.clear();
+        textBlocks.clear();
+        return events;
+    }
+
+    private ServerSentEvent<String> messageEvent(String id, String type, String role, String status, List<Map<String, Object>> content) {
+        return sse("message", tag(runtimeMessage(id, type, role, status, content)));
+    }
+
+    private ServerSentEvent<String> completedMessageEvent(String id, String type, String role, List<Map<String, Object>> content) {
+        Map<String, Object> message = runtimeMessage(id, type, role, "completed", content);
+        outputMessages.add(new LinkedHashMap<>(message));
+        return sse("message", tag(message));
+    }
+
+    private ServerSentEvent<String> contentEvent(String messageId, String type, Map<String, Object> fields, boolean delta, String status, int index) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("object", "content");
+        content.put("msg_id", messageId);
+        content.put("type", type);
+        content.put("status", status);
+        content.put("delta", delta);
+        content.put("index", index);
+        content.putAll(fields);
+        return sse("content", tag(content));
+    }
+
+    private Map<String, Object> runtimeMessage(String id, String type, String role, String status, List<Map<String, Object>> content) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", id);
+        message.put("object", "message");
+        message.put("role", role);
+        message.put("type", type);
+        message.put("status", status);
+        message.put("content", content);
+        message.put("name", "assistant");
+        if (usage != null) message.put("usage", usage);
+        return message;
+    }
+
+    private Map<String, Object> response(String status) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", responseId);
+        response.put("object", "response");
+        response.put("status", status);
+        response.put("created_at", createdEpochSeconds);
+        response.put("created_at_iso", createdAt);
+        response.put("session_id", sessionId);
+        response.put("output", List.of());
+        response.put("error", null);
+        if (usage != null) response.put("usage", usage);
+        return response;
+    }
+
+    private Map<String, Object> textContent(String text, boolean delta, int index) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("type", "text");
+        content.put("object", "content");
+        content.put("status", delta ? "in_progress" : "completed");
+        content.put("text", text != null ? text : "");
+        content.put("delta", delta);
+        content.put("index", index);
+        return content;
+    }
+
+    private Map<String, Object> dataContent(Map<String, Object> data, boolean delta, int index) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("type", "data");
+        content.put("object", "content");
+        content.put("status", delta ? "in_progress" : "completed");
+        content.put("data", data);
+        content.put("delta", delta);
+        content.put("index", index);
+        return content;
+    }
+
+    private Map<String, Object> functionCall(String callId, String name, String arguments) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("call_id", callId);
+        data.put("name", name);
+        data.put("arguments", arguments != null ? arguments : "");
+        return data;
+    }
+
+    private Map<String, Object> functionCallOutput(String callId, String name, String output) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("call_id", callId);
+        data.put("name", name);
+        data.put("output", output != null ? output : "");
+        return data;
+    }
+
+    private String buildToolOutput(ToolState state) {
+        if (state.outputBlocks.isEmpty()) return state.outputText.toString();
+        List<Object> blocks = new ArrayList<>(state.outputBlocks);
+        if (!state.outputText.isEmpty()) {
+            blocks.add(Map.of("type", "text", "text", state.outputText.toString()));
+        }
+        try {
+            return JSON.writeValueAsString(blocks);
+        } catch (JsonProcessingException e) {
+            return state.outputText.toString();
+        }
+    }
+
+    private Map<String, Object> tag(Map<String, Object> obj) {
+        obj.put("sequence_number", ++sequenceNumber);
+        return obj;
+    }
+
+    private ServerSentEvent<String> sse(String event, Map<String, Object> data) {
+        return ServerSentEvent.<String>builder().event(event).data(toJson(data)).build();
+    }
+
+    private String toJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            return "{\"detail\":\"JSON serialization failed\"}";
+        }
+    }
+
+    private String blockId(String blockId, String prefix) {
+        return Optional.ofNullable(blockId)
+                .filter(s -> !s.isBlank())
+                .orElse(prefix + "_default");
+    }
+
+    private String safeId(String id) {
+        return Optional.ofNullable(id).filter(s -> !s.isBlank()).orElse(UUID.randomUUID().toString().replace("-", ""));
+    }
+
+    private static String newMessageId() {
+        return "msg_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private static final class TextBlockState {
+        final int index;
+        final StringBuilder text = new StringBuilder();
+        boolean completed;
+
+        TextBlockState(int index) {
+            this.index = index;
+        }
+    }
+
+    private static final class ReasoningState {
+        final String messageId = newMessageId();
+        final StringBuilder text = new StringBuilder();
+        boolean started;
+    }
+
+    private static final class ToolState {
+        final String callId;
+        final String toolName;
+        final String actualToolName;
+        final String callMessageId;
+        final String resultMessageId;
+        final StringBuilder arguments = new StringBuilder();
+        final StringBuilder outputText = new StringBuilder();
+        final List<Map<String, Object>> outputBlocks = new ArrayList<>();
+
+        ToolState(String callId, String toolName, String actualToolName) {
+            this.callId = callId;
+            this.toolName = toolName;
+            this.actualToolName = actualToolName;
+            this.callMessageId = "tool_" + callId;
+            this.resultMessageId = "tool_result_" + callId;
+        }
+    }
+
+    private static final class DataBlockState {
+        final StringBuilder data = new StringBuilder();
+    }
+}

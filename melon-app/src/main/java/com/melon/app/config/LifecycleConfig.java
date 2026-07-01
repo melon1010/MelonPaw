@@ -10,6 +10,7 @@ import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.plugin.PluginManager;
 import com.melon.core.provider.ProviderManager;
+import com.melon.tools.agent.ListAgentsTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,6 +65,7 @@ public class LifecycleConfig implements ApplicationRunner {
         initAgentWorkspaces();
         providerManager.init(configManager.getConfig());
         multiAgentManager.init();
+        ListAgentsTool.setAgentListSupplier(multiAgentManager::listAgents);
         log.info("Phase 1 complete: config, providers, state store, builtin skills, workspaces initialized");
 
         // Agents are created lazily on first chat. Startup should not require model API keys.
