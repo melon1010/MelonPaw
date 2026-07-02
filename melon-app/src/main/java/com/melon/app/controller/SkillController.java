@@ -1,6 +1,8 @@
 package com.melon.app.controller;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.melon.app.service.SkillService;
+import com.melon.core.util.JsonUtils;
 import com.melon.core.security.ScanResult;
 import com.melon.core.security.SkillScanner;
 import org.slf4j.Logger;
@@ -13,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 import static com.melon.core.util.ValueUtils.stringValue;
@@ -223,13 +227,21 @@ public class SkillController {
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<ResponseEntity<?>> uploadSkill(@RequestPart("file") FilePart filePart) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Skill zip upload is not implemented")));
+    public Mono<ResponseEntity<?>> uploadSkill(@RequestPart("file") FilePart filePart,
+                                               @RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                               @RequestParam(defaultValue = "true") boolean enable,
+                                               @RequestParam(defaultValue = "") String targetName,
+                                               @RequestParam(defaultValue = "") String renameMap) {
+        return uploadZip(filePart, path -> skillService.importWorkspaceSkillZip(
+                safeAgentId(agentId), path, enable, targetName, parseRenameMap(renameMap)));
     }
 
     @PostMapping(value = "/pool/upload-zip", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<ResponseEntity<?>> uploadPoolSkillZip(@RequestPart("file") FilePart filePart) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Skill pool zip upload is not implemented")));
+    public Mono<ResponseEntity<?>> uploadPoolSkillZip(@RequestPart("file") FilePart filePart,
+                                                      @RequestParam(defaultValue = "") String targetName,
+                                                      @RequestParam(defaultValue = "") String renameMap) {
+        return uploadZip(filePart, path -> skillService.importPoolSkillZip(
+                path, targetName, parseRenameMap(renameMap)));
     }
 
     @PostMapping(value = "/ai/optimize/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -538,6 +550,50 @@ public class SkillController {
             return result;
         }
         return Map.of();
+    }
+
+    private Mono<ResponseEntity<?>> uploadZip(FilePart filePart, ZipImporter importer) {
+        return Mono.<ResponseEntity<?>>defer(() -> {
+            Path path;
+            try {
+                path = Files.createTempFile("melon-skill-upload-", ".zip");
+            } catch (Exception e) {
+                return Mono.error(e);
+            }
+            return filePart.transferTo(path)
+                    .then(Mono.fromCallable(() -> (ResponseEntity<?>) responseForImport(importer.importZip(path))))
+                    .doFinally(signal -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (Exception ignored) {
+                        }
+                    });
+        }).onErrorResume(e -> {
+            log.warn("Skill zip upload failed: {}", e.getMessage());
+            ResponseEntity<?> response = ResponseEntity.badRequest().body(Map.of("detail", e.getMessage()));
+            return Mono.just(response);
+        });
+    }
+
+    private ResponseEntity<?> responseForImport(Map<String, Object> result) {
+        Object conflicts = result.get("conflicts");
+        if (conflicts instanceof List<?> list && !list.isEmpty()) {
+            return ResponseEntity.status(409).body(Map.of("detail", result));
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    private Map<String, String> parseRenameMap(String raw) throws Exception {
+        if (raw == null || raw.isBlank()) return Map.of();
+        Map<String, Object> parsed = JsonUtils.getMapper().readValue(raw, new TypeReference<LinkedHashMap<String, Object>>() {});
+        Map<String, String> result = new LinkedHashMap<>();
+        parsed.forEach((key, value) -> result.put(key, value == null ? "" : String.valueOf(value)));
+        return result;
+    }
+
+    @FunctionalInterface
+    private interface ZipImporter {
+        Map<String, Object> importZip(Path path) throws Exception;
     }
 
 }

@@ -201,6 +201,7 @@ export function useCronJobs() {
   const executeNow = async (jobId: string) => {
     try {
       await api.triggerCronJob(jobId);
+      await fetchJobs();
       message.success("Task triggered successfully");
       return true;
     } catch (error) {

@@ -79,14 +79,14 @@ public class WorkspaceManager {
     public void writeAgentJson(Path dir, String agentId, AgentConfig config) {
         try {
             Files.createDirectories(dir);
-            Map<String, Object> data = Map.of(
-                    "id", agentId,
-                    "name", config.getName() != null ? config.getName() : agentId,
-                    "workspace_dir", dir.toString(),
-                    "active_model", config.getActiveModel() != null ? config.getActiveModel() : "",
-                    "system_prompt_files", config.getSystemPromptFiles() != null ? config.getSystemPromptFiles() : List.of(),
-                    "tools", config.getTools() != null ? config.getTools() : Map.of()
-            );
+            Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("version", 1);
+            data.put("id", agentId);
+            data.put("name", config.getName() != null ? config.getName() : agentId);
+            data.put("workspace_dir", dir.toString());
+            data.put("active_model", config.getActiveModel() != null ? config.getActiveModel() : "");
+            data.put("approval_level", config.getApproval() != null ? config.getApproval().getLevel() : "AUTO");
+            data.put("config", config);
             JSON.writerWithDefaultPrettyPrinter().writeValue(dir.resolve("agent.json").toFile(), data);
         } catch (IOException e) {
             log.error("Failed to write agent.json at {}", dir, e);

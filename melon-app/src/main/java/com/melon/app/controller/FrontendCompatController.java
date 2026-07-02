@@ -2,13 +2,20 @@ package com.melon.app.controller;
 
 import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
+import com.melon.app.cron.CronExecutor;
+import com.melon.app.service.AgentStatsService;
 import com.melon.tools.agent.DelegateExternalAgentTool;
-import com.melon.app.runner.AgentRunner;
 import com.melon.app.service.ApprovalService;
+import com.melon.core.agent.MultiAgentManager;
+import com.melon.core.config.AgentConfig;
+import com.melon.core.config.HeartbeatConfig;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 import static com.melon.core.util.ValueUtils.stringValue;
@@ -23,12 +30,19 @@ public class FrontendCompatController {
 
     private final ConfigManager configManager;
     private final ApprovalService approvalService;
-    private final AgentRunner agentRunner;
+    private final MultiAgentManager multiAgentManager;
+    private final CronExecutor cronExecutor;
+    private final AgentStatsService agentStatsService;
 
-    public FrontendCompatController(ConfigManager configManager, ApprovalService approvalService, AgentRunner agentRunner) {
+    public FrontendCompatController(ConfigManager configManager, ApprovalService approvalService,
+                                    MultiAgentManager multiAgentManager,
+                                    CronExecutor cronExecutor,
+                                    AgentStatsService agentStatsService) {
         this.configManager = configManager;
         this.approvalService = approvalService;
-        this.agentRunner = agentRunner;
+        this.multiAgentManager = multiAgentManager;
+        this.cronExecutor = cronExecutor;
+        this.agentStatsService = agentStatsService;
     }
 
     @GetMapping("/version")
@@ -52,28 +66,114 @@ public class FrontendCompatController {
     }
 
     @GetMapping("/config/user-timezone")
-    public Mono<ResponseEntity<?>> getTimezone() {
-        return Mono.just(ResponseEntity.ok(Map.of("timezone", TimeZone.getDefault().getID())));
+    public Mono<ResponseEntity<?>> getTimezone(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        AgentConfig config = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
+        String timezone = config != null && config.getTimezone() != null && !config.getTimezone().isBlank()
+                ? config.getTimezone()
+                : TimeZone.getDefault().getID();
+        return Mono.just(ResponseEntity.ok(Map.of("timezone", timezone)));
     }
 
     @PutMapping("/config/user-timezone")
-    public Mono<ResponseEntity<?>> setTimezone(@RequestBody Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("timezone", stringValue(body.get("timezone"), TimeZone.getDefault().getID()))));
+    public Mono<ResponseEntity<?>> setTimezone(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                               @RequestBody Map<String, Object> body) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        String timezone = stringValue(body != null ? body.get("timezone") : null, TimeZone.getDefault().getID());
+        if (config != null) {
+            config.setTimezone(timezone);
+            configManager.save();
+            multiAgentManager.reload(id);
+        }
+        return Mono.just(ResponseEntity.ok(Map.of("timezone", timezone)));
     }
 
     @GetMapping("/config/heartbeat")
-    public Mono<ResponseEntity<?>> getHeartbeat() {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", false, "interval_minutes", 0, "query", "")));
+    public Mono<ResponseEntity<?>> getHeartbeat(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        AgentConfig config = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
+        HeartbeatConfig heartbeat = config != null && config.getHeartbeat() != null ? config.getHeartbeat() : new HeartbeatConfig();
+        return Mono.just(ResponseEntity.ok(heartbeatPayload(heartbeat)));
     }
 
     @PutMapping("/config/heartbeat")
-    public Mono<ResponseEntity<?>> setHeartbeat(@RequestBody Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("enabled", false)));
+    public Mono<ResponseEntity<?>> setHeartbeat(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                @RequestBody Map<String, Object> body) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        if (config == null) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        HeartbeatConfig heartbeat = heartbeatFromBody(body);
+        config.setHeartbeat(heartbeat);
+        configManager.save();
+        multiAgentManager.reload(id);
+        return Mono.just(ResponseEntity.ok(heartbeatPayload(heartbeat)));
     }
 
     @PostMapping("/config/heartbeat/run")
-    public Mono<ResponseEntity<?>> runHeartbeat() {
-        return Mono.just(ResponseEntity.ok(Map.of("started", false, "detail", "Heartbeat is disabled in Java compatibility mode")));
+    public Mono<ResponseEntity<?>> runHeartbeat(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        String id = AgentRequestSupport.agentId(agentId);
+        return Mono.fromCallable(() -> {
+            AgentConfig config = configManager.getConfig().getAgent(id);
+            if (config == null) {
+                return ResponseEntity.notFound().build();
+            }
+            String message = heartbeatInstruction(id);
+            cronExecutor.injectMessage(id, message, "heartbeat-manual-" + System.currentTimeMillis(),
+                    "main", "main", "console", Map.of("source", "heartbeat", "channel", "console"),
+                    reply -> {}, err -> {});
+            return ResponseEntity.ok(Map.of("started", true));
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @SuppressWarnings("unchecked")
+    private HeartbeatConfig heartbeatFromBody(Map<String, Object> body) {
+        HeartbeatConfig heartbeat = new HeartbeatConfig();
+        if (body == null) return heartbeat;
+        heartbeat.setEnabled(Boolean.TRUE.equals(body.get("enabled")));
+        heartbeat.setEvery(stringValue(body.get("every"), "6h"));
+        heartbeat.setTarget(stringValue(body.get("target"), "main"));
+        heartbeat.setTimeoutSeconds((int) numberValue(body.get("timeoutSeconds"), 300));
+        Object activeHours = body.get("activeHours");
+        if (activeHours instanceof Map<?, ?> raw) {
+            Map<String, String> value = new LinkedHashMap<>();
+            raw.forEach((key, val) -> value.put(String.valueOf(key), String.valueOf(val)));
+            heartbeat.setActiveHours(value);
+        }
+        return heartbeat;
+    }
+
+    private Map<String, Object> heartbeatPayload(HeartbeatConfig heartbeat) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", heartbeat.isEnabled());
+        result.put("every", heartbeat.getEvery() != null && !heartbeat.getEvery().isBlank() ? heartbeat.getEvery() : "6h");
+        result.put("target", heartbeat.getTarget() != null && !heartbeat.getTarget().isBlank() ? heartbeat.getTarget() : "main");
+        result.put("timeoutSeconds", heartbeat.getTimeoutSeconds() > 0 ? heartbeat.getTimeoutSeconds() : 300);
+        result.put("activeHours", heartbeat.getActiveHours());
+        return result;
+    }
+
+    private String heartbeatInstruction(String agentId) {
+        Path heartbeatFile = configManager.resolveWorkspaceDir(agentId).resolve("HEARTBEAT.md");
+        if (Files.isRegularFile(heartbeatFile)) {
+            try {
+                String text = Files.readString(heartbeatFile).trim();
+                if (!text.isBlank()) return text;
+            } catch (Exception ignored) {
+                // Use default instruction below.
+            }
+        }
+        return "Heartbeat check: please check pending tasks and continue if needed.";
+    }
+
+    private double numberValue(Object value, double fallback) {
+        if (value instanceof Number number) return number.doubleValue();
+        if (value == null) return fallback;
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     @GetMapping("/config/channels/types")
@@ -149,14 +249,34 @@ public class FrontendCompatController {
     }
 
     @GetMapping("/config/security/tool-guard")
-    public Mono<ResponseEntity<?>> toolGuard() {
-        String level = configManager.getConfig().getAgent("default").getApproval().getLevel();
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", true, "approval_level", level, "rules", List.of())));
+    public Mono<ResponseEntity<?>> toolGuard(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        AgentConfig config = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
+        String level = config != null && config.getApproval() != null ? config.getApproval().getLevel() : "AUTO";
+        boolean strict = "STRICT".equalsIgnoreCase(level);
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "enabled", !"OFF".equalsIgnoreCase(level),
+                "approval_level", level,
+                "rules", strict ? List.of("strict_builtin_tools") : List.of("shell_delete_commands"),
+                "builtin_tools_require_approval", strict,
+                "delete_commands_require_approval", !"OFF".equalsIgnoreCase(level)
+        )));
     }
 
     @PutMapping("/config/security/tool-guard")
-    public Mono<ResponseEntity<?>> updateToolGuard(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("enabled", true)));
+    public Mono<ResponseEntity<?>> updateToolGuard(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                   @RequestBody(required = false) Map<String, Object> body) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        if (config == null) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        String level = body != null && body.get("approval_level") != null
+                ? String.valueOf(body.get("approval_level"))
+                : (Boolean.TRUE.equals(body != null ? body.get("enabled") : null) ? "STRICT" : "AUTO");
+        config.getApproval().setLevel(normalizeApprovalLevel(level));
+        configManager.save();
+        multiAgentManager.reload(id);
+        return toolGuard(agentId);
     }
 
     @GetMapping("/config/security/tool-guard/builtin-rules")
@@ -317,14 +437,12 @@ public class FrontendCompatController {
     }
 
     @GetMapping("/agent-stats")
-    public Mono<ResponseEntity<?>> agentStats() {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "summary", Map.of(),
-                "agents", List.of(),
-                "total_messages", 0,
-                "total_tool_calls", 0,
-                "total_tokens", 0
-        )));
+    public Mono<ResponseEntity<Object>> agentStats(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                   @RequestParam(value = "start_date", required = false) String startDate,
+                                                   @RequestParam(value = "end_date", required = false) String endDate) {
+        String id = AgentRequestSupport.agentId(agentId);
+        return Mono.fromCallable(() -> ResponseEntity.ok((Object) agentStatsService.getSummary(id, startDate, endDate)))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/")
@@ -344,8 +462,9 @@ public class FrontendCompatController {
                                                   @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId,
                                                   @RequestHeader(value = "X-User-Id", defaultValue = "default") String userId) {
         String sessionId = body != null ? stringValue(body.get("session_id"), "default") : "default";
-        return agentRunner.confirm(agentId, userId, sessionId, true)
-                .thenReturn(ResponseEntity.ok(Map.of("success", true, "message", "approved")));
+        String requestId = body != null ? stringValue(body.get("request_id"), "") : "";
+        boolean accepted = approvalService.decidePendingApproval(sessionId, requestId, true);
+        return Mono.just(ResponseEntity.ok(Map.of("success", accepted, "message", accepted ? "approved" : "approval not found")));
     }
 
     @PostMapping("/approval/deny")
@@ -353,8 +472,9 @@ public class FrontendCompatController {
                                                @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId,
                                                @RequestHeader(value = "X-User-Id", defaultValue = "default") String userId) {
         String sessionId = body != null ? stringValue(body.get("session_id"), "default") : "default";
-        return agentRunner.confirm(agentId, userId, sessionId, false)
-                .thenReturn(ResponseEntity.ok(Map.of("success", true, "message", "denied")));
+        String requestId = body != null ? stringValue(body.get("request_id"), "") : "";
+        boolean accepted = approvalService.decidePendingApproval(sessionId, requestId, false);
+        return Mono.just(ResponseEntity.ok(Map.of("success", accepted, "message", accepted ? "denied" : "approval not found")));
     }
 
     @GetMapping("/agent/")
@@ -495,5 +615,13 @@ public class FrontendCompatController {
 
     private java.nio.file.Path acpConfigFile() {
         return configManager.resolveStateDir().resolve("acp.json");
+    }
+
+    private String normalizeApprovalLevel(String value) {
+        String normalized = value == null ? "AUTO" : value.trim().toUpperCase();
+        return switch (normalized) {
+            case "OFF", "AUTO", "SMART", "STRICT" -> normalized;
+            default -> "AUTO";
+        };
     }
 }

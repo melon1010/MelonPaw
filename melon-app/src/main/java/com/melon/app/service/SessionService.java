@@ -28,11 +28,6 @@ public class SessionService {
 
     public SessionService(ConfigManager configManager) {
         this.sessionsDir = configManager.resolveHomeDir().resolve("sessions");
-        try {
-            Files.createDirectories(sessionsDir);
-        } catch (Exception e) {
-            log.warn("Failed to create sessions directory: {}", sessionsDir);
-        }
     }
 
     /**

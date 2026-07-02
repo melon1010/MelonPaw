@@ -2,10 +2,12 @@ package com.melon.app.runner;
 
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.AgentEventType;
 import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.event.RequireUserConfirmEvent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import com.melon.core.agent.MultiAgentManager;
 import com.melon.app.service.ApprovalService;
@@ -18,6 +20,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.melon.core.util.ValueUtils.stringValue;
 
@@ -49,10 +52,9 @@ public class AgentRunner {
         return Flux.defer(() -> {
                     HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
                     RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
-                    return agent.streamEvents(msgs, ctx);
+                    return streamWithApprovals(agent, msgs, ctx, agentId, sessionId);
                 })
                 .subscribeOn(Schedulers.boundedElastic())
-                .doOnNext(event -> captureApproval(agentId, sessionId, event))
                 .doOnError(e -> log.error("Agent stream failed: agent={}, user={}, session={}", agentId, userId, sessionId, e));
     }
 
@@ -68,22 +70,6 @@ public class AgentRunner {
                     HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
                     RuntimeContext ctx = buildContext(userId, sessionId, envInfo);
                     return agent.call(msgs, ctx);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    public Mono<Msg> confirm(String agentId, String userId, String sessionId, boolean approved) {
-        return Mono.defer(() -> {
-                    HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
-                    ToolUseBlock toolCall = approvalService.removePendingToolCall(sessionId);
-                    if (toolCall == null) {
-                        return Mono.empty();
-                    }
-                    Msg confirm = io.agentscope.core.message.UserMessage.builder()
-                            .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, List.of(new ConfirmResult(approved, toolCall))))
-                            .build();
-                    RuntimeContext ctx = buildContext(userId, sessionId, Map.of("agent_id", agentId, "source", "console"));
-                    return agent.call(List.of(confirm), ctx);
                 })
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -122,13 +108,41 @@ public class AgentRunner {
         return builder.build();
     }
 
-    private void captureApproval(String agentId, String sessionId, AgentEvent event) {
-        if (event instanceof RequireUserConfirmEvent confirm) {
-            String sid = sessionId != null ? sessionId : "default";
-            for (ToolUseBlock toolCall : confirm.getToolCalls()) {
-                approvalService.setPendingApproval(sid, toolCall, normalizeApproval(agentId, sid, toolCall));
-            }
-        }
+    private Flux<AgentEvent> streamWithApprovals(HarnessAgent agent, List<Msg> msgs, RuntimeContext ctx,
+                                                 String agentId, String sessionId) {
+        String sid = sessionId != null ? sessionId : "default";
+        AtomicReference<Mono<List<ConfirmResult>>> pending = new AtomicReference<>();
+        return Flux.defer(() -> agent.streamEvents(msgs, ctx))
+                .subscribeOn(Schedulers.boundedElastic())
+                .<AgentEvent>handle((event, sink) -> {
+                    if (event instanceof RequireUserConfirmEvent confirm) {
+                        List<Map<String, Object>> requests = confirm.getToolCalls().stream()
+                                .map(toolCall -> normalizeApproval(agentId, sid, toolCall))
+                                .toList();
+                        pending.set(approvalService.openPendingApproval(sid, confirm.getToolCalls(), requests));
+                        sink.next(event);
+                        return;
+                    }
+                    if (pending.get() != null && isPermissionStopEvent(event)) {
+                        return;
+                    }
+                    sink.next(event);
+                })
+                .concatWith(Flux.defer(() -> {
+                    Mono<List<ConfirmResult>> wait = pending.get();
+                    if (wait == null) return Flux.empty();
+                    return wait.publishOn(Schedulers.boundedElastic()).flatMapMany(results -> {
+                        Msg confirm = UserMessage.builder()
+                                .metadata(Map.of(Msg.METADATA_CONFIRM_RESULTS, results))
+                                .build();
+                        return streamWithApprovals(agent, List.of(confirm), ctx, agentId, sid);
+                    });
+                }));
+    }
+
+    private boolean isPermissionStopEvent(AgentEvent event) {
+        AgentEventType type = event.getType();
+        return type == AgentEventType.REQUEST_STOP || type == AgentEventType.AGENT_END;
     }
 
     private Map<String, Object> normalizeApproval(String agentId, String sessionId, ToolUseBlock toolCall) {

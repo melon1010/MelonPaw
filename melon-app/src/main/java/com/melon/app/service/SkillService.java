@@ -8,9 +8,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * Service for skill management.
@@ -22,6 +25,8 @@ public class SkillService {
 
     private static final Logger log = LoggerFactory.getLogger(SkillService.class);
     private static final String DEFAULT_AGENT_ID = "default";
+    private static final int MAX_ZIP_ENTRIES = 2_000;
+    private static final long MAX_ZIP_BYTES = 100L * 1024L * 1024L;
 
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
@@ -234,6 +239,16 @@ public class SkillService {
         return Map.of("success", true, "name", name);
     }
 
+    public Map<String, Object> importWorkspaceSkillZip(String agentId, Path zipFile, boolean enable,
+                                                       String targetName, Map<String, String> renameMap) throws IOException {
+        return importSkillZip(zipFile, skillsDir(agentId), enable, true, targetName, renameMap);
+    }
+
+    public Map<String, Object> importPoolSkillZip(Path zipFile, String targetName,
+                                                  Map<String, String> renameMap) throws IOException {
+        return importSkillZip(zipFile, skillPoolDir(), true, false, targetName, renameMap);
+    }
+
     public Path skillPoolDir() {
         Path dir = configManager.resolveSkillPoolDir();
         try {
@@ -271,15 +286,169 @@ public class SkillService {
         }
     }
 
+    private Map<String, Object> importSkillZip(Path zipFile, Path targetRoot, boolean enable,
+                                               boolean includeEnabled, String targetName,
+                                               Map<String, String> renameMap) throws IOException {
+        Path tmp = Files.createTempDirectory("melon-skill-zip-");
+        try {
+            extractZip(zipFile, tmp);
+            List<Path> found = findSkillDirs(tmp);
+            if (found.isEmpty()) {
+                throw new IOException("No skill found in zip: missing SKILL.md");
+            }
+            if (targetName != null && !targetName.isBlank() && found.size() != 1) {
+                throw new IOException("target_name is only supported for single-skill zip imports");
+            }
+
+            Files.createDirectories(targetRoot);
+            Map<String, String> renames = renameMap != null ? renameMap : Map.of();
+            List<Map<String, Object>> conflicts = new ArrayList<>();
+            List<SkillImportPlan> plans = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            Set<String> existing = existingSkillNames(targetRoot);
+            for (Path source : found) {
+                String rawName = source.getFileName().toString();
+                String originalName = normalizeSkillName(rawName);
+                String requested = targetName != null && !targetName.isBlank()
+                        ? targetName
+                        : renames.getOrDefault(rawName, renames.getOrDefault(originalName, originalName));
+                String finalName = normalizeSkillName(requested);
+                String content = Files.readString(source.resolve("SKILL.md"));
+                if (content.isBlank()) {
+                    throw new IOException("Skill " + originalName + " has empty SKILL.md");
+                }
+                if (!seen.add(finalName) || Files.exists(targetRoot.resolve(finalName))) {
+                    conflicts.add(importConflict(finalName, existing));
+                    continue;
+                }
+                plans.add(new SkillImportPlan(source, finalName));
+            }
+
+            if (!conflicts.isEmpty()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("imported", List.of());
+                result.put("count", 0);
+                if (includeEnabled) result.put("enabled", false);
+                result.put("conflicts", conflicts);
+                return result;
+            }
+
+            List<String> imported = new ArrayList<>();
+            for (SkillImportPlan plan : plans) {
+                Path target = targetRoot.resolve(plan.name());
+                copyDirectory(plan.source(), target);
+                if (includeEnabled) setEnabled(target, enable);
+                imported.add(plan.name());
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("imported", imported);
+            result.put("count", imported.size());
+            if (includeEnabled) result.put("enabled", enable);
+            return result;
+        } finally {
+            deleteDirectoryQuietly(tmp);
+        }
+    }
+
+    private void extractZip(Path zipFile, Path targetDir) throws IOException {
+        int entries = 0;
+        long totalBytes = 0L;
+        try (InputStream input = Files.newInputStream(zipFile);
+             ZipInputStream zip = new ZipInputStream(input)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                entries++;
+                if (entries > MAX_ZIP_ENTRIES) {
+                    throw new IOException("Zip archive has too many entries");
+                }
+                Path target = targetDir.resolve(entry.getName()).normalize();
+                if (!target.startsWith(targetDir.normalize())) {
+                    throw new IOException("Zip archive contains unsafe path: " + entry.getName());
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                    continue;
+                }
+                Files.createDirectories(target.getParent());
+                long copied = Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING);
+                totalBytes += copied;
+                if (totalBytes > MAX_ZIP_BYTES) {
+                    throw new IOException("Zip archive is too large");
+                }
+            }
+        } catch (java.util.zip.ZipException e) {
+            throw new IOException("Invalid zip archive", e);
+        }
+    }
+
+    private List<Path> findSkillDirs(Path root) throws IOException {
+        List<Path> candidates = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(root)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().equals("SKILL.md"))
+                    .map(Path::getParent)
+                    .sorted(Comparator.comparingInt(path -> path.getNameCount()))
+                    .forEach(dir -> {
+                        boolean nested = candidates.stream().anyMatch(dir::startsWith);
+                        if (!nested) candidates.add(dir);
+                    });
+        }
+        return candidates;
+    }
+
+    private Set<String> existingSkillNames(Path root) throws IOException {
+        if (!Files.isDirectory(root)) return Set.of();
+        Set<String> names = new HashSet<>();
+        try (Stream<Path> stream = Files.list(root)) {
+            stream.filter(Files::isDirectory).forEach(path -> names.add(path.getFileName().toString()));
+        }
+        return names;
+    }
+
+    private Map<String, Object> importConflict(String skillName, Set<String> existingNames) {
+        String suggested = skillName + "-imported";
+        int index = 1;
+        while (existingNames.contains(suggested)) {
+            suggested = skillName + "-imported-" + index++;
+        }
+        return Map.of(
+                "reason", "exists",
+                "skill_name", skillName,
+                "suggested_name", suggested
+        );
+    }
+
+    private String normalizeSkillName(String value) throws IOException {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isEmpty()) {
+            throw new IOException("Skill name cannot be empty");
+        }
+        if (normalized.indexOf('\0') >= 0) {
+            throw new IOException("Skill name cannot contain NUL bytes");
+        }
+        if (".".equals(normalized) || "..".equals(normalized)) {
+            throw new IOException("Invalid skill name: " + normalized);
+        }
+        if (normalized.contains("/") || normalized.contains("\\")) {
+            throw new IOException("Skill name cannot contain path separators");
+        }
+        return normalized;
+    }
+
     private void deleteSkillDir(Path skillDir) throws IOException {
         if (Files.exists(skillDir)) {
-            try (var stream = Files.walk(skillDir)) {
-                stream.sorted(Comparator.reverseOrder())
-                      .forEach(p -> {
-                          try { Files.delete(p); } catch (IOException ignored) {}
-                      });
-            }
+            deleteDirectoryQuietly(skillDir);
             log.info("Skill deleted: {}", skillDir.getFileName());
+        }
+    }
+
+    private void deleteDirectoryQuietly(Path dir) throws IOException {
+        if (!Files.exists(dir)) return;
+        try (var stream = Files.walk(dir)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try { Files.delete(p); } catch (IOException ignored) {}
+                    });
         }
     }
 
@@ -357,4 +526,6 @@ public class SkillService {
     private String safeAgentId(String agentId) {
         return agentId == null || agentId.isBlank() ? DEFAULT_AGENT_ID : agentId;
     }
+
+    private record SkillImportPlan(Path source, String name) {}
 }

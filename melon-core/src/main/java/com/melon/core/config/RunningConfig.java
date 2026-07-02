@@ -8,7 +8,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class RunningConfig {
 
     @JsonProperty("max_iters")
-    private int maxIters = 50;
+    private int maxIters = 100;
+
+    @JsonProperty("auto_continue_on_text_only")
+    private boolean autoContinueOnTextOnly = false;
 
     @JsonProperty("llm_retry_enabled")
     private boolean llmRetryEnabled = true;
@@ -28,6 +31,18 @@ public class RunningConfig {
     @JsonProperty("llm_max_qpm")
     private int llmMaxQpm = 0;
 
+    @JsonProperty("llm_rate_limit_pause")
+    private double llmRateLimitPause = 60.0;
+
+    @JsonProperty("llm_rate_limit_jitter")
+    private double llmRateLimitJitter = 5.0;
+
+    @JsonProperty("llm_acquire_timeout")
+    private double llmAcquireTimeout = 120.0;
+
+    @JsonProperty("history_max_length")
+    private int historyMaxLength = 10000;
+
     @JsonProperty("task_list_enabled")
     private boolean taskListEnabled = true;
 
@@ -42,6 +57,9 @@ public class RunningConfig {
 
     public int getMaxIters() { return maxIters; }
     public void setMaxIters(int maxIters) { this.maxIters = maxIters; }
+
+    public boolean isAutoContinueOnTextOnly() { return autoContinueOnTextOnly; }
+    public void setAutoContinueOnTextOnly(boolean autoContinueOnTextOnly) { this.autoContinueOnTextOnly = autoContinueOnTextOnly; }
 
     public boolean isLlmRetryEnabled() { return llmRetryEnabled; }
     public void setLlmRetryEnabled(boolean llmRetryEnabled) { this.llmRetryEnabled = llmRetryEnabled; }
@@ -60,6 +78,18 @@ public class RunningConfig {
 
     public int getLlmMaxQpm() { return llmMaxQpm; }
     public void setLlmMaxQpm(int llmMaxQpm) { this.llmMaxQpm = llmMaxQpm; }
+
+    public double getLlmRateLimitPause() { return llmRateLimitPause; }
+    public void setLlmRateLimitPause(double llmRateLimitPause) { this.llmRateLimitPause = llmRateLimitPause; }
+
+    public double getLlmRateLimitJitter() { return llmRateLimitJitter; }
+    public void setLlmRateLimitJitter(double llmRateLimitJitter) { this.llmRateLimitJitter = llmRateLimitJitter; }
+
+    public double getLlmAcquireTimeout() { return llmAcquireTimeout; }
+    public void setLlmAcquireTimeout(double llmAcquireTimeout) { this.llmAcquireTimeout = llmAcquireTimeout; }
+
+    public int getHistoryMaxLength() { return historyMaxLength; }
+    public void setHistoryMaxLength(int historyMaxLength) { this.historyMaxLength = historyMaxLength; }
 
     public boolean isTaskListEnabled() { return taskListEnabled; }
     public void setTaskListEnabled(boolean taskListEnabled) { this.taskListEnabled = taskListEnabled; }

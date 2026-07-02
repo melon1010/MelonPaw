@@ -63,9 +63,21 @@ public class TokenRecordingMiddleware implements MiddlewareBase {
             if (metadata != null) {
                 Object usageObj = metadata.get("usage");
                 if (usageObj instanceof Map<?, ?> map) {
-                    promptTokens = getLong(map.get("prompt_tokens"));
-                    completionTokens = getLong(map.get("completion_tokens"));
-                    totalTokens = getLong(map.get("total_tokens"));
+                    promptTokens = firstLong(map.get("prompt_tokens"), map.get("input_tokens"), map.get("inputTokens"));
+                    completionTokens = firstLong(map.get("completion_tokens"), map.get("output_tokens"), map.get("outputTokens"));
+                    totalTokens = firstLong(map.get("total_tokens"), map.get("totalTokens"));
+                }
+                Object chatUsageObj = metadata.get("_chat_usage");
+                if (chatUsageObj instanceof Map<?, ?> map) {
+                    if (promptTokens == 0) {
+                        promptTokens = firstLong(map.get("prompt_tokens"), map.get("input_tokens"), map.get("inputTokens"));
+                    }
+                    if (completionTokens == 0) {
+                        completionTokens = firstLong(map.get("completion_tokens"), map.get("output_tokens"), map.get("outputTokens"));
+                    }
+                    if (totalTokens == 0) {
+                        totalTokens = firstLong(map.get("total_tokens"), map.get("totalTokens"));
+                    }
                 }
                 if (totalTokens == 0) {
                     Long tt = getLongObj(metadata.get("total_tokens"));
@@ -98,6 +110,14 @@ public class TokenRecordingMiddleware implements MiddlewareBase {
 
     private Long getLongObj(Object val) {
         return val instanceof Number n ? n.longValue() : null;
+    }
+
+    private long firstLong(Object... values) {
+        for (Object value : values) {
+            Long number = getLongObj(value);
+            if (number != null) return number;
+        }
+        return 0;
     }
 
     public record TokenUsage(long promptTokens, long completionTokens, long totalTokens) {}

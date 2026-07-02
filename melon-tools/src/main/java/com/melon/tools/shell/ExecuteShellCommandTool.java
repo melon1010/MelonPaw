@@ -22,12 +22,18 @@ import java.util.regex.Pattern;
 public class ExecuteShellCommandTool extends ToolBase {
 
     private final WorkspacePathResolver pathResolver;
+    private final double defaultTimeoutSeconds;
+    private final String shellExecutable;
 
     public ExecuteShellCommandTool() {
-        this(null);
+        this(null, 60.0, null);
     }
 
     public ExecuteShellCommandTool(String workspaceDir) {
+        this(workspaceDir, 60.0, null);
+    }
+
+    public ExecuteShellCommandTool(String workspaceDir, double defaultTimeoutSeconds, String shellExecutable) {
         super(ToolBase.builder()
                 .name("execute_shell_command")
                 .description("Execute a shell command and return stdout/stderr")
@@ -58,6 +64,8 @@ public class ExecuteShellCommandTool extends ToolBase {
                 .readOnly(false)
                 .concurrencySafe(false));
         this.pathResolver = new WorkspacePathResolver(workspaceDir);
+        this.defaultTimeoutSeconds = sanitizeTimeout(defaultTimeoutSeconds, 60.0);
+        this.shellExecutable = shellExecutable == null || shellExecutable.isBlank() ? null : shellExecutable.trim();
     }
 
     private static Map<String, Object> parseSchema(String json) {
@@ -96,9 +104,9 @@ public class ExecuteShellCommandTool extends ToolBase {
 
         ProcessBuilder pb;
         if (isWindows) {
-            pb = new ProcessBuilder("cmd", "/D", "/S", "/C", command);
+            pb = windowsShell(command);
         } else {
-            pb = new ProcessBuilder("sh", "-c", command);
+            pb = new ProcessBuilder(shellExecutable != null ? shellExecutable : "sh", "-c", command);
         }
 
         if (cwd != null) {
@@ -136,11 +144,42 @@ public class ExecuteShellCommandTool extends ToolBase {
     }
 
     private double normalizeTimeout(Object raw) {
-        double value = raw instanceof Number number ? number.doubleValue() : 60.0;
-        if (Double.isNaN(value) || value <= 0) {
+        double value = raw instanceof Number number ? number.doubleValue() : parseTimeout(raw);
+        if (Double.isNaN(value) || value <= 0 || value == 60.0) {
+            value = defaultTimeoutSeconds;
+        }
+        return sanitizeTimeout(value, defaultTimeoutSeconds);
+    }
+
+    private double parseTimeout(Object raw) {
+        if (raw == null) return 60.0;
+        try {
+            return Double.parseDouble(String.valueOf(raw));
+        } catch (Exception ignored) {
             return 60.0;
         }
-        return Math.min(value, 600.0);
+    }
+
+    private double sanitizeTimeout(double value, double fallback) {
+        if (Double.isNaN(value) || value <= 0) {
+            value = fallback;
+        }
+        return Math.min(Math.max(value, 1.0), 600.0);
+    }
+
+    private ProcessBuilder windowsShell(String command) {
+        if (shellExecutable == null) {
+            return new ProcessBuilder("cmd", "/D", "/S", "/C", command);
+        }
+        String lower = shellExecutable.toLowerCase();
+        if (lower.endsWith("cmd") || lower.endsWith("cmd.exe")) {
+            return new ProcessBuilder(shellExecutable, "/D", "/S", "/C", command);
+        }
+        if (lower.endsWith("powershell") || lower.endsWith("powershell.exe")
+                || lower.endsWith("pwsh") || lower.endsWith("pwsh.exe")) {
+            return new ProcessBuilder(shellExecutable, "-NoProfile", "-Command", command);
+        }
+        return new ProcessBuilder(shellExecutable, "-c", command);
     }
 
     private ToolResultBlock error(ToolCallParam param, String message) {
@@ -161,9 +200,35 @@ public class ExecuteShellCommandTool extends ToolBase {
         });
     }
 
+    @Override
+    public boolean matchRule(String ruleContent, Map<String, Object> toolInput) {
+        if (ruleContent == null) return true;
+        if (!"delete".equalsIgnoreCase(ruleContent.trim())) return false;
+        Object raw = toolInput != null ? toolInput.get("command") : null;
+        return raw != null && looksLikeDeleteCommand(String.valueOf(raw));
+    }
+
+    private boolean looksLikeDeleteCommand(String command) {
+        String normalized = command == null ? "" : command.toLowerCase();
+        return DELETE_PATTERNS.stream().anyMatch(pattern -> pattern.matcher(normalized).find());
+    }
+
     private static final java.util.List<Pattern> DANGER_PATTERNS = java.util.List.of(
             Pattern.compile("taskkill\\s+/F\\s+/T\\s+/PID"),
             Pattern.compile("kill\\s+-9\\s+\\$\\$"),
             Pattern.compile("stop-process\\s+-id\\s+\\$PID")
+    );
+
+    private static final java.util.List<Pattern> DELETE_PATTERNS = java.util.List.of(
+            Pattern.compile("(^|[;&|()\\s])rm\\s+(-[a-z]*\\s+)*(-r|-R|-f|-rf|-fr|--recursive|--force)\\b"),
+            Pattern.compile("(^|[;&|()\\s])rmdir\\b"),
+            Pattern.compile("(^|[;&|()\\s])unlink\\b"),
+            Pattern.compile("(^|[;&|()\\s])shred\\b"),
+            Pattern.compile("(^|[;&|()\\s])trash\\b"),
+            Pattern.compile("(^|[;&|()\\s])git\\s+(rm|clean)\\b"),
+            Pattern.compile("\\bfind\\b.*\\s-delete\\b"),
+            Pattern.compile("(^|[;&|()\\s])del\\s+(/[^\\s]+\\s+)*[^\\s]+"),
+            Pattern.compile("(^|[;&|()\\s])erase\\s+(/[^\\s]+\\s+)*[^\\s]+"),
+            Pattern.compile("\\bremove-item\\b")
     );
 }

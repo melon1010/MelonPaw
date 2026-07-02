@@ -2,6 +2,7 @@ package com.melon.core.agent;
 
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.middleware.MiddlewareBase;
+import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionBehavior;
 import io.agentscope.core.permission.PermissionContextState;
@@ -23,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Constructor;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -92,7 +94,9 @@ public class MelonAgentFactory {
                 .memory(memoryConfig)
                 .stateStore(stateStore)
                 .maxIters(agentConfig.getRunning().getMaxIters())
-                .maxRetries(agentConfig.getRunning().getLlmMaxRetries())
+                .maxRetries(agentConfig.getRunning().isLlmRetryEnabled() ? agentConfig.getRunning().getLlmMaxRetries() : 0)
+                .modelExecutionConfig(modelExecutionConfig(agentConfig))
+                .toolExecutionConfig(toolExecutionConfig(agentConfig))
                 .permissionContext(buildPermissionContext(agentConfig))
                 .enableMetaTool(true)
                 .enableSkillManageTool(SkillManageConfig.defaults())
@@ -113,7 +117,10 @@ public class MelonAgentFactory {
 
     private Toolkit buildToolkit(AgentConfig config, Path workspaceDir) {
         Toolkit toolkit = new Toolkit();
-        registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool", workspaceDir.toString());
+        registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool",
+                workspaceDir.toString(),
+                config.getRunning().getShellCommandTimeout(),
+                config.getRunning().getShellCommandExecutable());
         registerIfEnabled(toolkit, config, "read_file", "com.melon.tools.fileio.ReadFileTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "write_file", "com.melon.tools.fileio.WriteFileTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "edit_file", "com.melon.tools.fileio.EditFileTool", workspaceDir.toString());
@@ -189,13 +196,16 @@ public class MelonAgentFactory {
         List<MiddlewareBase> list = new ArrayList<>();
 
         // 1. 系统提示词中间件 (对应 _build_sys_prompt)
-        list.add(new SystemPromptMiddleware(workspaceDir, config.getSystemPromptFiles()));
+        boolean heartbeatEnabled = config.getHeartbeat() != null && config.getHeartbeat().isEnabled();
+        list.add(new SystemPromptMiddleware(workspaceDir, config.getSystemPromptFiles(), heartbeatEnabled, false));
 
         // 2. 媒体过滤中间件 (对应 _reasoning 中的媒体过滤)
         list.add(new MediaFilterMiddleware());
 
         // 3. 自动续推中间件 (对应 _auto_continue_if_text_only)
-        list.add(new AutoContinueMiddleware());
+        if (config.getRunning().isAutoContinueOnTextOnly()) {
+            list.add(new AutoContinueMiddleware());
+        }
 
         // 4. Coding Mode 中间件
         if (config.getCodingMode().isEnabled()) {
@@ -212,10 +222,30 @@ public class MelonAgentFactory {
             }
         }));
 
-        // 6. 记忆被动注入中间件 (对应 pre_reply hook)
-        list.add(new MemoryInjectionMiddleware());
+        // Java 侧尚无真实 ReMeLight/ADBPG search backend，不注入假 memory_search 能力。
 
         return list;
+    }
+
+    private ExecutionConfig modelExecutionConfig(AgentConfig config) {
+        int attempts = config.getRunning().isLlmRetryEnabled()
+                ? Math.max(1, config.getRunning().getLlmMaxRetries() + 1)
+                : 1;
+        return ExecutionConfig.builder()
+                .timeout(Duration.ofMinutes(5))
+                .maxAttempts(attempts)
+                .initialBackoff(Duration.ofMillis(Math.max(100, Math.round(config.getRunning().getLlmBackoffBase() * 1000))))
+                .maxBackoff(Duration.ofMillis(Math.max(500, Math.round(config.getRunning().getLlmBackoffCap() * 1000))))
+                .backoffMultiplier(2.0)
+                .retryOn(config.getRunning().isLlmRetryEnabled() ? ExecutionConfig.RETRYABLE_ERRORS : ignored -> false)
+                .build();
+    }
+
+    private ExecutionConfig toolExecutionConfig(AgentConfig config) {
+        return ExecutionConfig.builder()
+                .timeout(Duration.ofMillis(Math.max(1000, Math.round(config.getRunning().getShellCommandTimeout() * 1000))))
+                .maxAttempts(1)
+                .build();
     }
 
     private PermissionContextState buildPermissionContext(AgentConfig config) {
@@ -223,18 +253,22 @@ public class MelonAgentFactory {
         if ("OFF".equalsIgnoreCase(level)) {
             return PermissionContextState.builder().mode(PermissionMode.BYPASS).build();
         }
-        PermissionContextState.Builder builder = PermissionContextState.builder().mode(PermissionMode.DEFAULT);
-        for (String tool : approvalTools("STRICT".equalsIgnoreCase(level))) {
-            builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "qwenpaw-java"));
+        boolean strict = "STRICT".equalsIgnoreCase(level);
+        PermissionContextState.Builder builder = PermissionContextState.builder()
+                .mode(strict ? PermissionMode.DEFAULT : PermissionMode.BYPASS);
+        if (strict) {
+            for (String tool : strictApprovalTools()) {
+                builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "qwenpaw-java"));
+            }
+        } else {
+            builder.addAskRule("execute_shell_command", new PermissionRule("execute_shell_command",
+                    "delete", PermissionBehavior.ASK, "qwenpaw-java"));
         }
         return builder.build();
     }
 
-    private List<String> approvalTools(boolean strict) {
-        if (strict) {
-            return List.of("execute_shell_command", "write_file", "edit_file", "read_file", "grep_search", "glob_search");
-        }
-        return List.of("execute_shell_command", "write_file", "edit_file");
+    private List<String> strictApprovalTools() {
+        return List.of("execute_shell_command", "write_file", "edit_file", "read_file", "grep_search", "glob_search");
     }
 
     /**
@@ -242,11 +276,16 @@ public class MelonAgentFactory {
      */
     private CompactionConfig buildCompactionConfig(ContextCompactConfig py) {
         if (!py.isEnabled()) {
-            return CompactionConfig.builder().triggerMessages(0).build();
+            return CompactionConfig.builder().triggerMessages(0).triggerTokens(0).build();
         }
+        int maxInputTokens = 128 * 1024;
+        int triggerTokens = (int) Math.max(1, Math.round(maxInputTokens * py.getCompactThresholdRatio()));
+        int keepTokens = (int) Math.max(1, Math.round(maxInputTokens * py.getReserveThresholdRatio()));
         CompactionConfig.Builder builder = CompactionConfig.builder()
                 .triggerMessages(py.getTriggerMessages())
+                .triggerTokens(triggerTokens)
                 .keepMessages(py.getKeepMessages())
+                .keepTokens(keepTokens)
                 .flushBeforeCompact(true)
                 .offloadBeforeCompact(true);
 

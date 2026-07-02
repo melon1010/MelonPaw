@@ -26,15 +26,22 @@ public class SystemPromptMiddleware implements MiddlewareBase {
     private final Path workspaceDir;
     private final List<String> promptFiles;
     private final boolean heartbeatEnabled;
+    private final boolean memoryEnabled;
 
     public SystemPromptMiddleware(Path workspaceDir, List<String> promptFiles) {
-        this(workspaceDir, promptFiles, true);
+        this(workspaceDir, promptFiles, true, false);
     }
 
     public SystemPromptMiddleware(Path workspaceDir, List<String> promptFiles, boolean heartbeatEnabled) {
+        this(workspaceDir, promptFiles, heartbeatEnabled, false);
+    }
+
+    public SystemPromptMiddleware(Path workspaceDir, List<String> promptFiles, boolean heartbeatEnabled,
+                                  boolean memoryEnabled) {
         this.workspaceDir = workspaceDir;
         this.promptFiles = promptFiles != null ? promptFiles : List.of("AGENTS.md", "SOUL.md", "PROFILE.md");
         this.heartbeatEnabled = heartbeatEnabled;
+        this.memoryEnabled = memoryEnabled;
     }
 
     @Override
@@ -94,8 +101,7 @@ public class SystemPromptMiddleware implements MiddlewareBase {
         int start = content.indexOf(MEMORY_START);
         int end = content.indexOf(MEMORY_END);
         if (start >= 0 && end > start) {
-            // 替换 memory 段为记忆指导提示词
-            String memoryPrompt = getMemoryPrompt();
+            String memoryPrompt = memoryEnabled ? getMemoryPrompt() : "";
             return content.substring(0, start) + memoryPrompt + content.substring(end + MEMORY_END.length());
         }
         return content;

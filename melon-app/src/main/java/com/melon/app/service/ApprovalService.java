@@ -2,13 +2,16 @@ package com.melon.app.service;
 
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
+import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.message.ToolUseBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import reactor.core.publisher.Mono;
 
 /**
  * Service for managing tool approvals and plans.
@@ -22,9 +25,8 @@ public class ApprovalService {
 
     private final ConfigManager configManager;
 
-    // sessionId -> pending approval request data
-    private final ConcurrentHashMap<String, Map<String, Object>> pendingApprovals = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, ToolUseBlock> pendingToolCalls = new ConcurrentHashMap<>();
+    // sessionId -> live approval gate for the paused AgentScope stream
+    private final ConcurrentHashMap<String, PendingApprovalSession> pendingApprovalSessions = new ConcurrentHashMap<>();
     // sessionId -> pending plan data
     private final ConcurrentHashMap<String, Map<String, Object>> pendingPlans = new ConcurrentHashMap<>();
 
@@ -64,21 +66,36 @@ public class ApprovalService {
      * Gets the pending approval for a session.
      */
     public Map<String, Object> getPendingApproval(String sessionId) {
-        return pendingApprovals.get(sessionId);
+        PendingApprovalSession session = pendingApprovalSessions.get(sessionId);
+        return session != null ? session.firstApproval() : null;
     }
 
     public List<Map<String, Object>> getPendingApprovals() {
-        return new ArrayList<>(pendingApprovals.values());
+        List<Map<String, Object>> approvals = new ArrayList<>();
+        for (PendingApprovalSession session : pendingApprovalSessions.values()) {
+            approvals.addAll(session.approvals());
+        }
+        return approvals;
     }
 
-    public void setPendingApproval(String sessionId, ToolUseBlock toolCall, Map<String, Object> approvalRequest) {
-        pendingApprovals.put(sessionId, approvalRequest);
-        pendingToolCalls.put(sessionId, toolCall);
+    public Mono<List<ConfirmResult>> openPendingApproval(String sessionId, List<ToolUseBlock> toolCalls,
+                                                         List<Map<String, Object>> approvalRequests) {
+        PendingApprovalSession session = new PendingApprovalSession(toolCalls, approvalRequests);
+        PendingApprovalSession previous = pendingApprovalSessions.put(sessionId, session);
+        if (previous != null) {
+            previous.cancel();
+        }
+        return Mono.fromFuture(session.future());
     }
 
-    public ToolUseBlock removePendingToolCall(String sessionId) {
-        pendingApprovals.remove(sessionId);
-        return pendingToolCalls.remove(sessionId);
+    public boolean decidePendingApproval(String sessionId, String requestId, boolean approved) {
+        PendingApprovalSession session = pendingApprovalSessions.get(sessionId);
+        if (session == null) return false;
+        boolean accepted = session.decide(requestId, approved);
+        if (session.isDone()) {
+            pendingApprovalSessions.remove(sessionId, session);
+        }
+        return accepted;
     }
 
     /**
@@ -112,5 +129,73 @@ public class ApprovalService {
     public void rejectPlan(String sessionId, String reason) {
         pendingPlans.remove(sessionId);
         log.info("Plan rejected for session: {} (reason: {})", sessionId, reason);
+    }
+
+    private static final class PendingApprovalSession {
+        private final Map<String, ToolUseBlock> toolCalls = new LinkedHashMap<>();
+        private final Map<String, Map<String, Object>> approvals = new LinkedHashMap<>();
+        private final List<ConfirmResult> results = new ArrayList<>();
+        private final CompletableFuture<List<ConfirmResult>> future = new CompletableFuture<>();
+
+        PendingApprovalSession(List<ToolUseBlock> toolCalls, List<Map<String, Object>> approvalRequests) {
+            if (toolCalls != null) {
+                for (ToolUseBlock toolCall : toolCalls) {
+                    if (toolCall != null && toolCall.getId() != null) {
+                        this.toolCalls.put(toolCall.getId(), toolCall);
+                    }
+                }
+            }
+            if (approvalRequests != null) {
+                for (Map<String, Object> request : approvalRequests) {
+                    if (request == null) continue;
+                    String id = String.valueOf(request.getOrDefault("request_id", ""));
+                    if (!id.isBlank()) {
+                        this.approvals.put(id, request);
+                    }
+                }
+            }
+        }
+
+        synchronized boolean decide(String requestId, boolean approved) {
+            if (future.isDone()) return false;
+            String id = requestId != null && !requestId.isBlank() ? requestId : firstPendingId();
+            ToolUseBlock toolCall = toolCalls.remove(id);
+            approvals.remove(id);
+            if (toolCall == null) return false;
+            results.add(new ConfirmResult(approved, toolCall));
+            if (toolCalls.isEmpty()) {
+                future.complete(List.copyOf(results));
+            }
+            return true;
+        }
+
+        synchronized Map<String, Object> firstApproval() {
+            return approvals.values().stream().findFirst().orElse(null);
+        }
+
+        synchronized List<Map<String, Object>> approvals() {
+            return new ArrayList<>(approvals.values());
+        }
+
+        synchronized boolean isDone() {
+            return future.isDone();
+        }
+
+        CompletableFuture<List<ConfirmResult>> future() {
+            return future;
+        }
+
+        synchronized void cancel() {
+            if (!future.isDone()) {
+                List<ConfirmResult> denied = toolCalls.values().stream()
+                        .map(toolCall -> new ConfirmResult(false, toolCall))
+                        .toList();
+                future.complete(denied);
+            }
+        }
+
+        private String firstPendingId() {
+            return toolCalls.keySet().stream().findFirst().orElse("");
+        }
     }
 }

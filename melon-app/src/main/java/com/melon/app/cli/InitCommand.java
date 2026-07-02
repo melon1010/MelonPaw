@@ -30,10 +30,6 @@ public class InitCommand implements Callable<Integer> {
             Files.createDirectories(melonDir);
             System.out.println("  Created " + melonDir);
 
-            Path sessionsDir = melonDir.resolve("sessions");
-            Files.createDirectories(sessionsDir);
-            System.out.println("  Created " + sessionsDir);
-
             Path skillsDir = melonDir.resolve("skills");
             Files.createDirectories(skillsDir);
             System.out.println("  Created " + skillsDir);
@@ -62,7 +58,6 @@ public class InitCommand implements Callable<Integer> {
 
             // 4. Ensure global ~/.melon directory structure exists
             Path homeMelon = Path.of(System.getProperty("user.home"), ".melon");
-            Files.createDirectories(homeMelon.resolve("sessions"));
             Files.createDirectories(homeMelon.resolve("skills"));
             System.out.println("  Ensured global directory structure at " + homeMelon);
 

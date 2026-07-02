@@ -67,7 +67,7 @@ public class ConsoleCompatController {
         String channel = stringValue(body.get("channel"), "console");
         List<Map<String, Object>> frontendContext = frontendUserMessages(agentId, body.get("input"));
         String text = modelFacingText(frontendContext);
-        ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, userId, channel, titleFromText(text));
+        ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, userId, channel, initialTitle(agentId, text));
         String chatId = chat.getId();
         chatManager.setStatus(agentId, chatId, "running");
 
@@ -185,6 +185,28 @@ public class ConsoleCompatController {
         if (text == null || text.isBlank()) return "New Chat";
         String title = text.strip().replaceAll("\\s+", " ");
         return title.length() > 30 ? title.substring(0, 30) : title;
+    }
+
+    private String initialTitle(String agentId, String text) {
+        if (!autoTitleEnabled(agentId)) {
+            return "New Chat";
+        }
+        return titleFromText(text);
+    }
+
+    private boolean autoTitleEnabled(String agentId) {
+        try {
+            var config = configManager.getConfig().getAgent(agentId);
+            Object raw = config != null && config.getFrontendRunningConfig() != null
+                    ? config.getFrontendRunningConfig().get("auto_title_config")
+                    : null;
+            if (raw instanceof Map<?, ?> map && map.get("enabled") != null) {
+                return Boolean.parseBoolean(String.valueOf(map.get("enabled")));
+            }
+        } catch (Exception ignored) {
+            // Use default below.
+        }
+        return true;
     }
 
     @SuppressWarnings("unchecked")

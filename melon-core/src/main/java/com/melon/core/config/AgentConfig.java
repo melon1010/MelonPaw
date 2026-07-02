@@ -48,6 +48,18 @@ public class AgentConfig {
     @JsonProperty("approval")
     private ApprovalConfig approval = new ApprovalConfig();
 
+    @JsonProperty("heartbeat")
+    private HeartbeatConfig heartbeat = new HeartbeatConfig();
+
+    @JsonProperty("language")
+    private String language = "zh";
+
+    @JsonProperty("timezone")
+    private String timezone = "UTC";
+
+    @JsonProperty("frontend_running_config")
+    private Map<String, Object> frontendRunningConfig = Map.of();
+
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 
@@ -86,6 +98,18 @@ public class AgentConfig {
 
     public ApprovalConfig getApproval() { return approval; }
     public void setApproval(ApprovalConfig approval) { this.approval = approval; }
+
+    public HeartbeatConfig getHeartbeat() { return heartbeat; }
+    public void setHeartbeat(HeartbeatConfig heartbeat) { this.heartbeat = heartbeat; }
+
+    public String getLanguage() { return language; }
+    public void setLanguage(String language) { this.language = language; }
+
+    public String getTimezone() { return timezone; }
+    public void setTimezone(String timezone) { this.timezone = timezone; }
+
+    public Map<String, Object> getFrontendRunningConfig() { return frontendRunningConfig; }
+    public void setFrontendRunningConfig(Map<String, Object> frontendRunningConfig) { this.frontendRunningConfig = frontendRunningConfig; }
 
     public static class ApprovalConfig {
         @JsonProperty("level")

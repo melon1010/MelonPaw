@@ -1,5 +1,6 @@
 package com.melon.app.controller;
 
+import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
@@ -43,10 +44,13 @@ public class WorkspaceController {
 
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
+    private final MultiAgentManager multiAgentManager;
 
-    public WorkspaceController(ConfigManager configManager, WorkspaceManager workspaceManager) {
+    public WorkspaceController(ConfigManager configManager, WorkspaceManager workspaceManager,
+                               MultiAgentManager multiAgentManager) {
         this.configManager = configManager;
         this.workspaceManager = workspaceManager;
+        this.multiAgentManager = multiAgentManager;
     }
 
     /**
@@ -166,67 +170,213 @@ public class WorkspaceController {
     public Mono<ResponseEntity<?>> getRunningConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
             AgentConfig agentConfig = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
+            if (agentConfig == null) {
+                return ResponseEntity.notFound().build();
+            }
             Map<String, Object> result = new LinkedHashMap<>();
+            if (agentConfig.getFrontendRunningConfig() != null) {
+                result.putAll(agentConfig.getFrontendRunningConfig());
+            }
             result.put("max_iters", agentConfig.getRunning().getMaxIters());
-            result.put("auto_continue_on_text_only", true);
+            result.put("auto_continue_on_text_only", agentConfig.getRunning().isAutoContinueOnTextOnly());
             result.put("shell_command_timeout", agentConfig.getRunning().getShellCommandTimeout());
-            result.put("shell_command_executable", "");
+            result.put("shell_command_executable", agentConfig.getRunning().getShellCommandExecutable() != null
+                    ? agentConfig.getRunning().getShellCommandExecutable()
+                    : "");
             result.put("llm_retry_enabled", agentConfig.getRunning().isLlmRetryEnabled());
             result.put("llm_max_retries", agentConfig.getRunning().getLlmMaxRetries());
             result.put("llm_backoff_base", agentConfig.getRunning().getLlmBackoffBase());
             result.put("llm_backoff_cap", agentConfig.getRunning().getLlmBackoffCap());
             result.put("llm_max_concurrent", agentConfig.getRunning().getLlmMaxConcurrent());
-            result.put("llm_max_qpm", 0);
-            result.put("llm_rate_limit_pause", 0);
-            result.put("llm_rate_limit_jitter", 0);
-            result.put("llm_acquire_timeout", 0);
-            result.put("history_max_length", 0);
-            result.put("context_manager_backend", "native");
-            result.put("memory_manager_backend", "native");
+            result.put("llm_max_qpm", agentConfig.getRunning().getLlmMaxQpm());
+            result.put("llm_rate_limit_pause", agentConfig.getRunning().getLlmRateLimitPause());
+            result.put("llm_rate_limit_jitter", agentConfig.getRunning().getLlmRateLimitJitter());
+            result.put("llm_acquire_timeout", agentConfig.getRunning().getLlmAcquireTimeout());
+            result.put("history_max_length", agentConfig.getRunning().getHistoryMaxLength());
+            result.putIfAbsent("context_manager_backend", "light");
+            result.putIfAbsent("memory_manager_backend", "remelight");
             result.put("approval_level", agentConfig.getApproval().getLevel());
-            result.put("light_context_config", Map.of(
-                    "strategy", "native",
-                    "dialog_path", "",
-                    "token_count_estimate_divisor", 4,
-                    "context_compact_config", Map.of("enabled", agentConfig.getContextCompact().isEnabled(),
+            if (!(result.get("light_context_config") instanceof Map<?, ?>)) {
+                result.put("light_context_config", Map.of(
+                        "strategy", "native",
+                        "dialog_path", "",
+                        "token_count_estimate_divisor", 4,
+                        "context_compact_config", Map.of("enabled", agentConfig.getContextCompact().isEnabled(),
                             "compact_threshold_ratio", agentConfig.getContextCompact().getCompactThresholdRatio(),
                             "reserve_threshold_ratio", agentConfig.getContextCompact().getReserveThresholdRatio()),
-                    "tool_result_pruning_config", Map.of("enabled", false,
+                        "tool_result_pruning_config", Map.of("enabled", false,
                             "pruning_recent_n", 0,
                             "pruning_old_msg_max_bytes", 0,
                             "pruning_recent_msg_max_bytes", 0,
                             "offload_retention_days", 0,
                             "exempt_file_extensions", List.of(),
                             "exempt_tool_names", List.of())
-            ));
-            result.put("reme_light_memory_config", Map.of(
-                    "summarize_when_compact", false,
-                    "auto_memory_interval", 0,
-                    "dream_cron", "",
-                    "auto_memory_search_config", Map.of("enabled", false, "max_results", 0, "persist_to_context", false),
-                    "embedding_model_config", Map.of(),
-                    "rebuild_memory_index_on_start", false,
-                    "enable_search_raw_log", false
-            ));
-            result.put("auto_title_config", Map.of("enabled", false, "timeout_seconds", 0));
+                ));
+            }
+            result.putIfAbsent("reme_light_memory_config", defaultReMeLightMemoryConfig());
+            result.putIfAbsent("auto_title_config", Map.of("enabled", true, "timeout_seconds", 30));
             return ResponseEntity.ok(result);
         });
     }
 
     @PutMapping("/running-config")
-    public Mono<ResponseEntity<?>> updateRunningConfig(@RequestBody Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body));
+    public Mono<ResponseEntity<?>> updateRunningConfig(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                       @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            String id = AgentRequestSupport.agentId(agentId);
+            AgentConfig agentConfig = configManager.getConfig().getAgent(id);
+            if (agentConfig == null) {
+                return ResponseEntity.notFound().build();
+            }
+            if (body != null) {
+                agentConfig.setFrontendRunningConfig(new LinkedHashMap<>(body));
+                applyRunningConfig(agentConfig, body);
+            }
+            String approvalLevel = body != null && body.get("approval_level") != null
+                    ? String.valueOf(body.get("approval_level"))
+                    : "";
+            if (!approvalLevel.isBlank()) {
+                agentConfig.getApproval().setLevel(normalizeApprovalLevel(approvalLevel));
+            }
+            configManager.save();
+            multiAgentManager.reload(id);
+            return ResponseEntity.ok(body != null ? body : Map.of());
+        });
+    }
+
+    private String normalizeApprovalLevel(String value) {
+        String normalized = value == null ? "AUTO" : value.trim().toUpperCase();
+        return switch (normalized) {
+            case "OFF", "AUTO", "SMART", "STRICT" -> normalized;
+            default -> "AUTO";
+        };
+    }
+
+    private void applyRunningConfig(AgentConfig agentConfig, Map<String, Object> body) {
+        if (body.get("max_iters") != null) {
+            agentConfig.getRunning().setMaxIters((int) numberValue(body.get("max_iters"), agentConfig.getRunning().getMaxIters()));
+        }
+        if (body.get("auto_continue_on_text_only") != null) {
+            agentConfig.getRunning().setAutoContinueOnTextOnly(booleanValue(body.get("auto_continue_on_text_only"), agentConfig.getRunning().isAutoContinueOnTextOnly()));
+        }
+        if (body.get("shell_command_timeout") != null) {
+            agentConfig.getRunning().setShellCommandTimeout(numberValue(body.get("shell_command_timeout"), agentConfig.getRunning().getShellCommandTimeout()));
+        }
+        if (body.get("shell_command_executable") != null) {
+            String executable = String.valueOf(body.get("shell_command_executable")).trim();
+            agentConfig.getRunning().setShellCommandExecutable(executable.isBlank() ? null : executable);
+        }
+        if (body.get("llm_retry_enabled") != null) {
+            agentConfig.getRunning().setLlmRetryEnabled(booleanValue(body.get("llm_retry_enabled"), agentConfig.getRunning().isLlmRetryEnabled()));
+        }
+        if (body.get("llm_max_retries") != null) {
+            agentConfig.getRunning().setLlmMaxRetries((int) numberValue(body.get("llm_max_retries"), agentConfig.getRunning().getLlmMaxRetries()));
+        }
+        if (body.get("llm_backoff_base") != null) {
+            agentConfig.getRunning().setLlmBackoffBase(numberValue(body.get("llm_backoff_base"), agentConfig.getRunning().getLlmBackoffBase()));
+        }
+        if (body.get("llm_backoff_cap") != null) {
+            agentConfig.getRunning().setLlmBackoffCap(numberValue(body.get("llm_backoff_cap"), agentConfig.getRunning().getLlmBackoffCap()));
+        }
+        if (body.get("llm_max_concurrent") != null) {
+            agentConfig.getRunning().setLlmMaxConcurrent((int) numberValue(body.get("llm_max_concurrent"), agentConfig.getRunning().getLlmMaxConcurrent()));
+        }
+        if (body.get("llm_max_qpm") != null) {
+            agentConfig.getRunning().setLlmMaxQpm((int) numberValue(body.get("llm_max_qpm"), agentConfig.getRunning().getLlmMaxQpm()));
+        }
+        if (body.get("llm_rate_limit_pause") != null) {
+            agentConfig.getRunning().setLlmRateLimitPause(numberValue(body.get("llm_rate_limit_pause"), agentConfig.getRunning().getLlmRateLimitPause()));
+        }
+        if (body.get("llm_rate_limit_jitter") != null) {
+            agentConfig.getRunning().setLlmRateLimitJitter(numberValue(body.get("llm_rate_limit_jitter"), agentConfig.getRunning().getLlmRateLimitJitter()));
+        }
+        if (body.get("llm_acquire_timeout") != null) {
+            agentConfig.getRunning().setLlmAcquireTimeout(numberValue(body.get("llm_acquire_timeout"), agentConfig.getRunning().getLlmAcquireTimeout()));
+        }
+        if (body.get("history_max_length") != null) {
+            agentConfig.getRunning().setHistoryMaxLength((int) numberValue(body.get("history_max_length"), agentConfig.getRunning().getHistoryMaxLength()));
+        }
+        if (body.get("light_context_config") instanceof Map<?, ?> lightRaw) {
+            Map<String, Object> light = toStringMap(lightRaw);
+            if (light.get("context_compact_config") instanceof Map<?, ?> compactRaw) {
+                Map<String, Object> compact = toStringMap(compactRaw);
+                if (compact.get("enabled") != null) {
+                    agentConfig.getContextCompact().setEnabled(booleanValue(compact.get("enabled"), agentConfig.getContextCompact().isEnabled()));
+                }
+                if (compact.get("compact_threshold_ratio") != null) {
+                    agentConfig.getContextCompact().setCompactThresholdRatio(numberValue(compact.get("compact_threshold_ratio"), agentConfig.getContextCompact().getCompactThresholdRatio()));
+                }
+                if (compact.get("reserve_threshold_ratio") != null) {
+                    agentConfig.getContextCompact().setReserveThresholdRatio(numberValue(compact.get("reserve_threshold_ratio"), agentConfig.getContextCompact().getReserveThresholdRatio()));
+                }
+            }
+        }
+    }
+
+    private Map<String, Object> defaultReMeLightMemoryConfig() {
+        return Map.of(
+                "summarize_when_compact", false,
+                "auto_memory_interval", 0,
+                "dream_cron", "",
+                "auto_memory_search_config", Map.of("enabled", false, "max_results", 5, "persist_to_context", false),
+                "embedding_model_config", Map.of(
+                        "backend", "",
+                        "api_key", "",
+                        "base_url", "",
+                        "model_name", "",
+                        "dimensions", 1536,
+                        "enable_cache", true,
+                        "use_dimensions", false,
+                        "max_cache_size", 1000,
+                        "max_input_length", 8192,
+                        "max_batch_size", 32
+                ),
+                "rebuild_memory_index_on_start", false,
+                "enable_search_raw_log", false
+        );
+    }
+
+    private double numberValue(Object value, double fallback) {
+        if (value instanceof Number number) return number.doubleValue();
+        if (value == null) return fallback;
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean booleanValue(Object value, boolean fallback) {
+        if (value instanceof Boolean b) return b;
+        if (value == null) return fallback;
+        return Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private Map<String, Object> toStringMap(Map<?, ?> raw) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
     }
 
     @GetMapping("/language")
-    public Mono<ResponseEntity<?>> getLanguage() {
-        return Mono.just(ResponseEntity.ok(Map.of("language", "zh")));
+    public Mono<ResponseEntity<?>> getLanguage(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        AgentConfig config = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
+        return Mono.just(ResponseEntity.ok(Map.of("language", config != null ? config.getLanguage() : "zh")));
     }
 
     @PutMapping("/language")
-    public Mono<ResponseEntity<?>> updateLanguage(@RequestBody Map<String, Object> body) {
+    public Mono<ResponseEntity<?>> updateLanguage(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                  @RequestBody Map<String, Object> body) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        String language = body != null ? String.valueOf(body.getOrDefault("language", "zh")) : "zh";
+        if (config != null) {
+            config.setLanguage(language);
+            configManager.save();
+            multiAgentManager.reload(id);
+        }
         return Mono.just(ResponseEntity.ok(Map.of(
-                "language", body != null ? body.getOrDefault("language", "zh") : "zh",
+                "language", language,
                 "copied_files", List.of()
         )));
     }
