@@ -264,5 +264,5 @@ public class MyPlugin implements MelonPlugin {
 
 ## 📌 相关
 
-- 代码质量分析报告见 [CODE_ANALYSIS.md](./CODE_ANALYSIS.md)
+- 代码质量分析报告见 [CODE_ANALYSIS.md](doc/CODE_ANALYSIS.md)
 - 前端控制台说明见 [console/REMADE.md](./console/REMADE.md)

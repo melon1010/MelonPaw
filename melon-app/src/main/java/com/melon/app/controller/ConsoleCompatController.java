@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
 import com.melon.app.runner.ChatSpec;
+import com.melon.app.runner.CommandDispatcher;
 import com.melon.app.runner.QwenPawEnvelopeMapper;
 import com.melon.app.service.ApprovalService;
+import com.melon.app.service.SkillService;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.agent.CommandHandler;
+import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.util.SafePathUtil;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
@@ -48,13 +52,20 @@ public class ConsoleCompatController {
     private final ChatManager chatManager;
     private final ApprovalService approvalService;
     private final ConfigManager configManager;
+    private final CommandDispatcher commandDispatcher;
+    private final SkillService skillService;
+    private final MultiAgentManager multiAgentManager;
 
     public ConsoleCompatController(AgentRunner agentRunner, ChatManager chatManager, ApprovalService approvalService,
-                                   ConfigManager configManager) {
+                                   ConfigManager configManager, CommandDispatcher commandDispatcher,
+                                   SkillService skillService, MultiAgentManager multiAgentManager) {
         this.agentRunner = agentRunner;
         this.chatManager = chatManager;
         this.approvalService = approvalService;
         this.configManager = configManager;
+        this.commandDispatcher = commandDispatcher;
+        this.skillService = skillService;
+        this.multiAgentManager = multiAgentManager;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -70,6 +81,15 @@ public class ConsoleCompatController {
         ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, userId, channel, initialTitle(agentId, text));
         String chatId = chat.getId();
         chatManager.setStatus(agentId, chatId, "running");
+
+        String commandReply = handleCommand(agentId, text);
+        if (commandReply != null) {
+            QwenPawEnvelopeMapper envelope = new QwenPawEnvelopeMapper(sessionId);
+            saveCommandShadow(agentId, channel, userId, sessionId, frontendContext, commandReply);
+            chatManager.setStatus(agentId, chatId, "idle");
+            return Flux.fromIterable(envelope.completeWithText(commandReply))
+                    .doFinally(signal -> log.info("Console command handled: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal));
+        }
 
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("agent_id", agentId);
@@ -341,6 +361,75 @@ public class ConsoleCompatController {
             }
         }
         return String.join("\n", parts).trim();
+    }
+
+    private String handleCommand(String agentId, String text) {
+        if (text == null || !text.trim().startsWith("/")) return null;
+        String token = text.trim().split("\\s+", 2)[0].toLowerCase();
+        if (!List.of("/clear", "/compact", "/new", "/model", "/skills", "/help", "/mission").contains(token)) {
+            return null;
+        }
+        if ("/mission".equals(token)) {
+            return readWorkspaceMarkdown(agentId, "SOUL.md", "No mission file is configured.");
+        }
+        CommandHandler.CommandResult result = commandDispatcher.dispatch(text);
+        if (result == null || result.getType() == CommandHandler.CommandType.UNKNOWN) return null;
+        if (!result.isSuccess()) return result.getMessage();
+        return switch (result.getAction()) {
+            case SWITCH_MODEL -> switchModel(agentId, stringValue(result.getData().get("model"), ""));
+            case LIST_SKILLS -> listSkills(agentId);
+            case CLEAR_HISTORY -> "Conversation history is cleared for this turn. Start a new chat if you need a clean persisted session.";
+            case COMPACT_CONTEXT -> "Context compaction has been requested. AgentScope will compact automatically when configured thresholds are reached.";
+            case NEW_SESSION -> "New session requested. Use the new chat button to create a separate persisted session.";
+            case SHOW_HELP -> result.getMessage();
+            default -> result.getMessage();
+        };
+    }
+
+    private String switchModel(String agentId, String model) {
+        if (model == null || model.isBlank()) return "Usage: /model <provider:model>";
+        var agent = configManager.getConfig().getAgent(agentId);
+        if (agent == null) return "Agent not found: " + agentId;
+        agent.setActiveModel(model);
+        configManager.save();
+        multiAgentManager.reload(agentId);
+        return "Active model switched to " + model;
+    }
+
+    private String listSkills(String agentId) {
+        List<String> lines = new ArrayList<>();
+        for (Map<String, Object> skill : skillService.listSkills(agentId)) {
+            String enabled = Boolean.TRUE.equals(skill.get("enabled")) ? "enabled" : "disabled";
+            String description = stringValue(skill.get("description"), "");
+            lines.add("- " + stringValue(skill.get("name"), "") + " [" + enabled + "]" + (description.isBlank() ? "" : ": " + description));
+        }
+        return lines.isEmpty() ? "No workspace skills are installed." : String.join("\n", lines);
+    }
+
+    private String readWorkspaceMarkdown(String agentId, String fileName, String fallback) {
+        try {
+            Path file = configManager.resolveWorkspaceDir(agentId).resolve(fileName);
+            if (Files.isRegularFile(file)) {
+                String content = Files.readString(file).trim();
+                if (!content.isBlank()) return content;
+            }
+        } catch (Exception ignored) {
+            // Use fallback below.
+        }
+        return fallback;
+    }
+
+    private void saveCommandShadow(String agentId, String channel, String userId, String sessionId,
+                                   List<Map<String, Object>> frontendContext, String reply) {
+        List<Map<String, Object>> context = new ArrayList<>(frontendContext);
+        Map<String, Object> assistant = new LinkedHashMap<>();
+        assistant.put("id", "assistant_" + UUID.randomUUID().toString().replace("-", ""));
+        assistant.put("role", "assistant");
+        assistant.put("name", agentId);
+        assistant.put("content", List.of(Map.of("type", "text", "text", reply != null ? reply : "")));
+        assistant.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")));
+        context.add(assistant);
+        chatManager.saveSessionShadow(agentId, channel, userId, sessionId, Map.of("context", context));
     }
 
     private String uploadedAbsolutePath(Map<String, Object> item) {

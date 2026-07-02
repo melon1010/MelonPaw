@@ -1,7 +1,10 @@
 package com.melon.app.controller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.melon.app.service.BuiltinSkillService;
+import com.melon.app.service.SecuritySettingsService;
 import com.melon.app.service.SkillService;
+import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.security.ScanResult;
 import com.melon.core.security.SkillScanner;
@@ -31,10 +34,18 @@ public class SkillController {
     private static final Logger log = LoggerFactory.getLogger(SkillController.class);
 
     private final SkillService skillService;
+    private final BuiltinSkillService builtinSkillService;
+    private final SecuritySettingsService securitySettingsService;
     private final SkillScanner skillScanner;
+    private final MultiAgentManager multiAgentManager;
 
-    public SkillController(SkillService skillService) {
+    public SkillController(SkillService skillService, BuiltinSkillService builtinSkillService,
+                           SecuritySettingsService securitySettingsService,
+                           MultiAgentManager multiAgentManager) {
         this.skillService = skillService;
+        this.builtinSkillService = builtinSkillService;
+        this.securitySettingsService = securitySettingsService;
+        this.multiAgentManager = multiAgentManager;
         this.skillScanner = new SkillScanner();
     }
 
@@ -149,13 +160,23 @@ public class SkillController {
     }
 
     @PostMapping("/batch-enable")
-    public Mono<ResponseEntity<?>> batchEnable(@RequestBody List<String> names) {
-        return Mono.just(ResponseEntity.ok(Map.of("results", batchResult(names, true))));
+    public Mono<ResponseEntity<?>> batchEnable(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                               @RequestBody List<String> names) {
+        return Mono.fromCallable(() -> {
+            Map<String, Object> results = batchSetEnabled(agentId, names, true);
+            reload(agentId);
+            return ResponseEntity.ok(Map.of("results", results));
+        });
     }
 
     @PostMapping("/batch-disable")
-    public Mono<ResponseEntity<?>> batchDisable(@RequestBody List<String> names) {
-        return Mono.just(ResponseEntity.ok(Map.of("results", batchResult(names, true))));
+    public Mono<ResponseEntity<?>> batchDisable(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                @RequestBody List<String> names) {
+        return Mono.fromCallable(() -> {
+            Map<String, Object> results = batchSetEnabled(agentId, names, false);
+            reload(agentId);
+            return ResponseEntity.ok(Map.of("results", results));
+        });
     }
 
     @PostMapping("/batch-delete")
@@ -172,22 +193,20 @@ public class SkillController {
 
     @GetMapping("/pool/builtin-sources")
     public Mono<ResponseEntity<?>> poolBuiltinSources() {
-        return Mono.just(ResponseEntity.ok(List.of()));
+        return Mono.fromCallable(() -> ResponseEntity.ok(builtinSkillService.listBuiltinSources()));
     }
 
     @GetMapping("/pool/builtin-notice")
     public Mono<ResponseEntity<?>> poolBuiltinNotice() {
-        return Mono.just(ResponseEntity.ok(Map.of("available", false, "updates", List.of(), "message", "")));
+        return Mono.fromCallable(() -> ResponseEntity.ok(builtinSkillService.builtinNotice()));
     }
 
     @PostMapping("/pool/import-builtin")
     public Mono<ResponseEntity<?>> importBuiltinPoolSkills(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "imported", List.of(),
-                "updated", List.of(),
-                "unchanged", List.of(),
-                "conflicts", List.of()
-        )));
+        return Mono.<ResponseEntity<?>>fromCallable(() -> responseForImport(builtinSkillService.importBuiltins(
+                builtinImports(body),
+                Boolean.TRUE.equals(body != null ? body.get("overwrite_conflicts") : null)
+        ))).onErrorResume(e -> Mono.just(badRequest(e)));
     }
 
     @PostMapping("/pool/upload")
@@ -222,6 +241,7 @@ public class SkillController {
                     downloaded.add(result);
                 }
             }
+            targets.forEach(multiAgentManager::reload);
             return ResponseEntity.ok(Map.of("downloaded", downloaded, "conflicts", conflicts));
         });
     }
@@ -232,8 +252,12 @@ public class SkillController {
                                                @RequestParam(defaultValue = "true") boolean enable,
                                                @RequestParam(defaultValue = "") String targetName,
                                                @RequestParam(defaultValue = "") String renameMap) {
-        return uploadZip(filePart, path -> skillService.importWorkspaceSkillZip(
-                safeAgentId(agentId), path, enable, targetName, parseRenameMap(renameMap)));
+        return uploadZip(filePart, path -> {
+            Map<String, Object> result = skillService.importWorkspaceSkillZip(
+                    safeAgentId(agentId), path, enable, targetName, parseRenameMap(renameMap));
+            reload(agentId);
+            return result;
+        });
     }
 
     @PostMapping(value = "/pool/upload-zip", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -283,16 +307,18 @@ public class SkillController {
                     return ResponseEntity.badRequest().body(Map.of("error", "Skill name is required"));
                 }
 
-                // Security scan before creating
-                ScanResult scanResult = skillScanner.scan(name, content);
-                if (!scanResult.isSafe()) {
+                ScanResult scanResult = scanSkill(name, content);
+                if (securitySettingsService.shouldBlockSkill(name, scanResult)) {
+                    securitySettingsService.recordBlockedSkill(name, scanResult, "blocked");
                     return ResponseEntity.badRequest().body(Map.of(
                             "error", "Skill failed security scan",
                             "issues", scanResult.getIssues()
                     ));
                 }
+                recordWarnedSkill(name, scanResult);
 
                 skillService.createSkill(agentId, name, content);
+                reload(agentId);
                 return ResponseEntity.ok(Map.of("created", true, "status", "created", "name", name));
             } catch (Exception e) {
                 log.error("Failed to create skill", e);
@@ -311,6 +337,15 @@ public class SkillController {
             if (name.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of("detail", "name is required"));
             }
+            ScanResult scanResult = scanSkill(name, content);
+            if (securitySettingsService.shouldBlockSkill(name, scanResult)) {
+                securitySettingsService.recordBlockedSkill(name, scanResult, "blocked");
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "Skill failed security scan",
+                        "issues", scanResult.getIssues()
+                ));
+            }
+            recordWarnedSkill(name, scanResult);
             if (!sourceName.equals(name) && !sourceName.isBlank()) {
                 try {
                     skillService.deleteSkill(agentId, sourceName);
@@ -318,6 +353,7 @@ public class SkillController {
                 }
             }
             skillService.createSkill(agentId, name, content);
+            reload(agentId);
             return ResponseEntity.ok(Map.of("success", true, "mode", sourceName.equals(name) ? "edit" : "rename", "name", name));
         });
     }
@@ -325,13 +361,21 @@ public class SkillController {
     @PostMapping("/{name}/enable")
     public Mono<ResponseEntity<?>> enableSkill(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
                                                @PathVariable String name) {
-        return Mono.fromCallable(() -> ResponseEntity.ok(skillService.enableSkill(agentId, name)));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> result = skillService.enableSkill(agentId, name);
+            reload(agentId);
+            return ResponseEntity.ok(result);
+        });
     }
 
     @PostMapping("/{name}/disable")
     public Mono<ResponseEntity<?>> disableSkill(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
                                                 @PathVariable String name) {
-        return Mono.fromCallable(() -> ResponseEntity.ok(skillService.disableSkill(agentId, name)));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> result = skillService.disableSkill(agentId, name);
+            reload(agentId);
+            return ResponseEntity.ok(result);
+        });
     }
 
     @PutMapping("/{name}/channels")
@@ -341,6 +385,7 @@ public class SkillController {
         return Mono.fromCallable(() -> {
             List<String> values = channels != null ? channels : List.of();
             skillService.setSkillChannels(agentId, name, values);
+            reload(agentId);
             return ResponseEntity.ok(Map.of("updated", true, "channels", values));
         });
     }
@@ -352,6 +397,7 @@ public class SkillController {
         return Mono.fromCallable(() -> {
             List<String> values = tags != null ? tags : List.of();
             skillService.setSkillTags(agentId, name, values);
+            reload(agentId);
             return ResponseEntity.ok(Map.of("updated", true, "tags", values));
         });
     }
@@ -368,6 +414,7 @@ public class SkillController {
                                                      @RequestBody(required = false) Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             skillService.setSkillConfig(agentId, name, configPayload(body));
+            reload(agentId);
             return ResponseEntity.ok(Map.of("updated", true));
         });
     }
@@ -377,6 +424,7 @@ public class SkillController {
                                                      @PathVariable String name) {
         return Mono.fromCallable(() -> {
             skillService.clearSkillConfig(agentId, name);
+            reload(agentId);
             return ResponseEntity.ok(Map.of("cleared", true));
         });
     }
@@ -412,8 +460,11 @@ public class SkillController {
     }
 
     @PostMapping("/pool/{name}/update-builtin")
-    public Mono<ResponseEntity<?>> updatePoolBuiltin(@PathVariable String name) {
-        return Mono.just(ResponseEntity.ok(Map.of("updated", false, "name", name, "available", false)));
+    public Mono<ResponseEntity<?>> updatePoolBuiltin(@PathVariable String name,
+                                                     @RequestBody(required = false) Map<String, Object> body) {
+        return Mono.<ResponseEntity<?>>fromCallable(() -> ResponseEntity.ok(
+                builtinSkillService.updateBuiltin(name, stringValue(body != null ? body.get("language") : null, ""))
+        )).onErrorResume(e -> Mono.just(badRequest(e)));
     }
 
     @DeleteMapping("/pool/{name}")
@@ -434,6 +485,7 @@ public class SkillController {
         return Mono.fromCallable(() -> {
             try {
                 skillService.deleteSkill(agentId, name);
+                reload(agentId);
                 return ResponseEntity.ok(Map.of("deleted", true, "status", "deleted", "name", name));
             } catch (Exception e) {
                 log.error("Failed to delete skill: {}", name, e);
@@ -459,20 +511,34 @@ public class SkillController {
 
     private Map<String, Object> poolSkillSpec(Map<String, Object> raw) {
         Map<String, Object> spec = skillSpec(raw);
-        spec.put("protected", false);
-        spec.put("external", false);
-        spec.put("external_path", "");
-        spec.put("sync_status", "");
-        spec.put("latest_version_text", "");
-        spec.put("installed_from", "");
+        spec.put("protected", Boolean.TRUE.equals(raw.get("protected")));
+        spec.put("external", Boolean.TRUE.equals(raw.get("external")));
+        spec.put("external_path", stringValue(raw.get("external_path"), ""));
+        spec.put("version_text", stringValue(raw.get("version_text"), ""));
+        spec.put("commit_text", stringValue(raw.get("commit_text"), ""));
+        spec.put("builtin_language", stringValue(raw.get("builtin_language"), ""));
+        spec.put("available_builtin_languages", raw.getOrDefault("available_builtin_languages", List.of()));
+        Map<String, Object> sync = builtinSkillService.syncInfo(stringValue(raw.get("name"), ""), raw);
+        spec.put("sync_status", stringValue(sync.get("sync_status"), ""));
+        spec.put("latest_version_text", stringValue(sync.get("latest_version_text"), ""));
+        if (sync.get("available_languages") instanceof List<?> languages && !languages.isEmpty()) {
+            spec.put("available_builtin_languages", languages);
+        }
+        spec.put("installed_from", stringValue(raw.get("installed_from"), ""));
         return spec;
     }
 
-    private Map<String, Object> batchResult(List<String> names, boolean success) {
+    private Map<String, Object> batchSetEnabled(String agentId, List<String> names, boolean enabled) {
         Map<String, Object> results = new LinkedHashMap<>();
         if (names != null) {
             for (String name : names) {
-                results.put(name, Map.of("success", success));
+                try {
+                    results.put(name, enabled
+                            ? skillService.enableSkill(agentId, name)
+                            : skillService.disableSkill(agentId, name));
+                } catch (Exception e) {
+                    results.put(name, Map.of("success", false, "reason", e.getMessage()));
+                }
             }
         }
         return results;
@@ -490,6 +556,7 @@ public class SkillController {
                 }
             }
         }
+        reload(agentId);
         return results;
     }
 
@@ -532,8 +599,28 @@ public class SkillController {
         return agentId == null || agentId.isBlank() ? "default" : agentId;
     }
 
+    private void reload(String agentId) {
+        multiAgentManager.reload(safeAgentId(agentId));
+    }
+
     private List<String> configuredAgents() {
         return new ArrayList<>(skillService.agentIds());
+    }
+
+    private ScanResult scanSkill(String name, String content) {
+        Map<String, Object> config = securitySettingsService.skillScanner();
+        if ("off".equals(config.get("mode"))) {
+            ScanResult result = new ScanResult(name);
+            result.setSafe(true);
+            return result;
+        }
+        return skillScanner.scan(name, content);
+    }
+
+    private void recordWarnedSkill(String name, ScanResult scanResult) {
+        if (scanResult != null && (!scanResult.isSafe() || !scanResult.getWarnings().isEmpty())) {
+            securitySettingsService.recordBlockedSkill(name, scanResult, "warned");
+        }
     }
 
     private String agentName(String id) {
@@ -550,6 +637,34 @@ public class SkillController {
             return result;
         }
         return Map.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> builtinImports(Map<String, Object> body) {
+        if (body == null) {
+            return null;
+        }
+        Object imports = body.get("imports");
+        if (imports instanceof List<?> list && !list.isEmpty()) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    map.forEach((key, value) -> copy.put(String.valueOf(key), value));
+                    result.add(copy);
+                }
+            }
+            return result;
+        }
+        Object names = body.get("skill_names");
+        if (names instanceof List<?> list && !list.isEmpty()) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Object name : list) {
+                result.add(Map.of("skill_name", String.valueOf(name)));
+            }
+            return result;
+        }
+        return null;
     }
 
     private Mono<ResponseEntity<?>> uploadZip(FilePart filePart, ZipImporter importer) {
@@ -581,6 +696,10 @@ public class SkillController {
             return ResponseEntity.status(409).body(Map.of("detail", result));
         }
         return ResponseEntity.ok(result);
+    }
+
+    private ResponseEntity<?> badRequest(Throwable e) {
+        return ResponseEntity.badRequest().body(Map.of("detail", e.getMessage() == null ? "Bad request" : e.getMessage()));
     }
 
     private Map<String, String> parseRenameMap(String raw) throws Exception {

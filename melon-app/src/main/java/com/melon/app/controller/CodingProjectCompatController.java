@@ -13,9 +13,12 @@ import reactor.core.publisher.Mono;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * QwenPaw frontend-compatible coding project API.
@@ -95,11 +98,36 @@ public class CodingProjectCompatController {
     }
 
     @PostMapping(value = "/upload-zip", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<ResponseEntity<?>> uploadZip(@RequestPart("file") FilePart filePart, @RequestParam String name) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of(
-                "detail", "Project zip import is not implemented in Java compatibility mode",
-                "enabled", false
-        )));
+    public Mono<ResponseEntity<?>> uploadZip(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                             @RequestPart("file") FilePart filePart,
+                                             @RequestParam(defaultValue = "project") String name) {
+        return Mono.<ResponseEntity<?>>defer(() -> {
+            Path temp;
+            try {
+                temp = Files.createTempFile("melon-project-upload-", ".zip");
+            } catch (Exception e) {
+                return Mono.error(e);
+            }
+            return filePart.transferTo(temp)
+                    .then(Mono.<ResponseEntity<?>>fromCallable(() -> {
+                        Path projects = projectsDir(agentId);
+                        Files.createDirectories(projects);
+                        Path target = projects.resolve(sanitizeName(name)).normalize();
+                        if (!target.startsWith(projects.normalize())) {
+                            return ResponseEntity.badRequest().body(Map.of("detail", "invalid project name"));
+                        }
+                        Files.createDirectories(target);
+                        unzip(temp, target);
+                        JsonUtils.save(stateFile(agentId), Map.of("path", target.toString()));
+                        return ResponseEntity.ok(Map.of("path", target.toString(), "name", target.getFileName().toString()));
+                    }))
+                    .doFinally(signal -> {
+                        try {
+                            Files.deleteIfExists(temp);
+                        } catch (Exception ignored) {
+                        }
+                    });
+        }).onErrorResume(e -> Mono.just(ResponseEntity.badRequest().body(Map.of("detail", e.getMessage()))));
     }
 
     @GetMapping("/browse-dirs")
@@ -203,5 +231,24 @@ public class CodingProjectCompatController {
     private void run(Path dir, String... command) throws Exception {
         Process process = new ProcessBuilder(command).directory(dir.toFile()).start();
         process.waitFor(15, TimeUnit.SECONDS);
+    }
+
+    private void unzip(Path zipFile, Path target) throws Exception {
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFile))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path output = target.resolve(entry.getName()).normalize();
+                if (!output.startsWith(target.normalize())) {
+                    throw new SecurityException("Suspicious path in zip: " + entry.getName());
+                }
+                if (entry.isDirectory()) {
+                    Files.createDirectories(output);
+                } else {
+                    Files.createDirectories(output.getParent());
+                    Files.copy(zis, output, StandardCopyOption.REPLACE_EXISTING);
+                }
+                zis.closeEntry();
+            }
+        }
     }
 }

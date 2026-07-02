@@ -6,6 +6,7 @@ import io.agentscope.core.state.JsonFileAgentStateStore;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.middleware.TokenRecordingMiddleware;
+import com.melon.core.provider.ProviderManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +27,7 @@ public class MultiAgentManager {
     private final MelonAgentFactory agentFactory;
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
+    private final ProviderManager providerManager;
     private AgentStateStore stateStore;
 
     public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager) {
@@ -34,8 +36,22 @@ public class MultiAgentManager {
 
     public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager,
                              TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback) {
+        this(configManager, workspaceManager, tokenUsageCallback, List.of());
+    }
+
+    public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback,
+                             List<ToolkitContributor> toolkitContributors) {
+        this(configManager, workspaceManager, tokenUsageCallback, toolkitContributors, null);
+    }
+
+    public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback,
+                             List<ToolkitContributor> toolkitContributors,
+                             ProviderManager providerManager) {
         this.configManager = configManager;
-        this.agentFactory = new MelonAgentFactory(this, tokenUsageCallback);
+        this.providerManager = providerManager;
+        this.agentFactory = new MelonAgentFactory(this, tokenUsageCallback, toolkitContributors, providerManager);
         this.workspaceManager = workspaceManager;
     }
 
@@ -72,6 +88,14 @@ public class MultiAgentManager {
             }
             if (!config.isEnabled()) {
                 throw new IllegalStateException("Agent is disabled: " + id);
+            }
+            if ((config.getActiveModel() == null || config.getActiveModel().isBlank()) && providerManager != null) {
+                Map<String, String> active = providerManager.getActiveModel();
+                String providerId = active.get("provider_id");
+                String model = active.get("model");
+                if (providerId != null && !providerId.isBlank() && model != null && !model.isBlank()) {
+                    config.setActiveModel(providerId + ":" + model);
+                }
             }
             Path workspaceDir = configManager.resolveWorkspaceDir(id);
             workspaceManager.initWorkspace(workspaceDir);

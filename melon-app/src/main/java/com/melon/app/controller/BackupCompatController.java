@@ -116,10 +116,28 @@ public class BackupCompatController {
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<ResponseEntity<?>> importBackup(@RequestPart(value = "file", required = false) FilePart filePart,
                                                 @RequestPart(value = "pending_token", required = false) String pendingToken) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of(
-                "detail", "Backup import is not implemented in Java compatibility mode",
-                "enabled", false
-        )));
+        if (filePart == null) {
+            return Mono.just(ResponseEntity.badRequest().body(Map.of("detail", "file is required")));
+        }
+        return Mono.<ResponseEntity<?>>defer(() -> {
+            Path temp;
+            try {
+                temp = Files.createTempFile("melon-backup-import-", ".zip");
+            } catch (Exception e) {
+                return Mono.error(e);
+            }
+            return filePart.transferTo(temp)
+                    .then(Mono.<ResponseEntity<?>>fromCallable(() -> {
+                        Path imported = backupService.importBackup(temp, filePart.filename());
+                        return ResponseEntity.ok(Map.of("imported", true, "backup", backupMeta(imported)));
+                    }))
+                    .doFinally(signal -> {
+                        try {
+                            Files.deleteIfExists(temp);
+                        } catch (Exception ignored) {
+                        }
+                    });
+        }).onErrorResume(e -> Mono.just(ResponseEntity.badRequest().body(Map.of("detail", e.getMessage()))));
     }
 
     private Map<String, Object> backupMeta(Path backup) {

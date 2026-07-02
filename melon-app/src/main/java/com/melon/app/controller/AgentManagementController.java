@@ -120,9 +120,11 @@ public class AgentManagementController {
                 if (body.get("system_prompt_files") instanceof List<?> files) {
                     agent.setSystemPromptFiles(files.stream().map(String::valueOf).toList());
                 }
+                boolean hasSkillField = body.containsKey("skill_names") || body.containsKey("skills");
                 List<String> skills = stringList(value(body, "skill_names", "skills"));
-                if (!skills.isEmpty()) {
+                if (hasSkillField) {
                     agent.setSkills(skills);
+                    materializeInitialSkills(id, skills);
                 }
             }
             configManager.save();
@@ -219,7 +221,7 @@ public class AgentManagementController {
         result.put("running", config.getRunning());
         result.put("channels", Map.of());
         result.put("mcp", Map.of());
-        result.put("heartbeat", Map.of("enabled", false));
+        result.put("heartbeat", Map.of("enabled", config.getHeartbeat() != null && config.getHeartbeat().isEnabled()));
         return result;
     }
 

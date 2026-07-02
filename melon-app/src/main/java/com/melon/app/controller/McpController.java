@@ -1,6 +1,7 @@
 package com.melon.app.controller;
 
 import com.melon.app.mcp.McpClientManager;
+import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
@@ -35,10 +36,12 @@ public class McpController {
 
     private final McpClientManager mcpClientManager;
     private final ConfigManager configManager;
+    private final MultiAgentManager multiAgentManager;
 
-    public McpController(McpClientManager mcpClientManager, ConfigManager configManager) {
+    public McpController(McpClientManager mcpClientManager, ConfigManager configManager, MultiAgentManager multiAgentManager) {
         this.mcpClientManager = mcpClientManager;
         this.configManager = configManager;
+        this.multiAgentManager = multiAgentManager;
     }
 
     @GetMapping
@@ -64,6 +67,7 @@ public class McpController {
         return Mono.fromCallable(() -> {
             var config = McpClientManager.McpServerConfig.fromMap(normalizeClientBody(body));
             mcpClientManager.register(config);
+            multiAgentManager.reloadAll();
             return ResponseEntity.status(201).body(clientInfo(config));
         });
     }
@@ -79,6 +83,7 @@ public class McpController {
             mcpClientManager.unregister(clientKey);
             var config = McpClientManager.McpServerConfig.fromMap(normalized);
             mcpClientManager.register(config);
+            multiAgentManager.reloadAll();
             return ResponseEntity.ok(clientInfo(config));
         });
     }
@@ -96,6 +101,7 @@ public class McpController {
             } else {
                 mcpClientManager.disconnect(clientKey);
             }
+            multiAgentManager.reloadAll();
             return ResponseEntity.ok(clientInfo(config));
         });
     }
@@ -107,6 +113,7 @@ public class McpController {
             if (!removed) {
                 return ResponseEntity.notFound().build();
             }
+            multiAgentManager.reloadAll();
             return ResponseEntity.ok(Map.of("message", "deleted"));
         });
     }
@@ -219,6 +226,7 @@ public class McpController {
             try {
                 var config = McpClientManager.McpServerConfig.fromMap(body);
                 mcpClientManager.register(config);
+                multiAgentManager.reloadAll();
                 log.info("MCP server registered: id={}, name={}", config.getId(), config.getName());
                 return ResponseEntity.ok(config.toMap());
             } catch (Exception e) {
@@ -238,6 +246,7 @@ public class McpController {
             if (!removed) {
                 return ResponseEntity.notFound().build();
             }
+            multiAgentManager.reloadAll();
             return ResponseEntity.ok(Map.of("status", "removed", "id", id));
         });
     }
@@ -305,6 +314,7 @@ public class McpController {
     public Mono<ResponseEntity<?>> reload() {
         return Mono.fromCallable(() -> {
             mcpClientManager.reload();
+            multiAgentManager.reloadAll();
             return ResponseEntity.ok(Map.of("status", "reloaded"));
         });
     }

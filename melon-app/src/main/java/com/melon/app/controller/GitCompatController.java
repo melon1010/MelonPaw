@@ -137,8 +137,30 @@ public class GitCompatController {
     }
 
     @PostMapping("/discard")
-    public Mono<ResponseEntity<?>> discard(@RequestBody Map<String, Object> body) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Discard is disabled in Java compatibility mode")));
+    public Mono<ResponseEntity<?>> discard(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                           @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            if (!isGitRepo(agentId)) return ResponseEntity.status(409).body(Map.of("detail", "Not a git repository"));
+            List<String> paths = stringList(body.get("paths"));
+            if (paths.isEmpty()) return ResponseEntity.badRequest().body(Map.of("detail", "paths is required"));
+            List<String> restoreArgs = new ArrayList<>();
+            restoreArgs.add("restore");
+            restoreArgs.add("--staged");
+            restoreArgs.add("--worktree");
+            restoreArgs.add("--");
+            restoreArgs.addAll(paths);
+            GitResult restore = git(agentId, restoreArgs.toArray(String[]::new));
+            List<String> cleanArgs = new ArrayList<>();
+            cleanArgs.add("clean");
+            cleanArgs.add("-fd");
+            cleanArgs.add("--");
+            cleanArgs.addAll(paths);
+            GitResult clean = git(agentId, cleanArgs.toArray(String[]::new));
+            if (restore.exitCode() != 0 && clean.exitCode() != 0) {
+                return ResponseEntity.status(409).body(Map.of("detail", restore.stderr() + clean.stderr()));
+            }
+            return ResponseEntity.ok(Map.of("discarded", paths));
+        });
     }
 
     @GetMapping("/commit-diff")
@@ -148,8 +170,16 @@ public class GitCompatController {
     }
 
     @PostMapping("/revert")
-    public Mono<ResponseEntity<?>> revert(@RequestBody Map<String, Object> body) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Revert is disabled in Java compatibility mode")));
+    public Mono<ResponseEntity<?>> revert(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                          @RequestBody Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            if (!isGitRepo(agentId)) return ResponseEntity.status(409).body(Map.of("detail", "Not a git repository"));
+            String hash = stringValue(body.getOrDefault("hash", body.get("commit_hash")), "");
+            if (hash.isBlank()) return ResponseEntity.badRequest().body(Map.of("detail", "commit hash is required"));
+            GitResult result = git(agentId, "revert", "--no-edit", hash);
+            if (result.exitCode() != 0) return ResponseEntity.status(409).body(Map.of("detail", result.stderr()));
+            return ResponseEntity.ok(Map.of("reverted", hash, "output", result.stdout() + result.stderr()));
+        });
     }
 
     private Mono<ResponseEntity<?>> runPathCommand(String agentId, String command, String responseKey, Map<String, Object> body) {

@@ -3,6 +3,7 @@ package com.melon.app.mcp;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.env.EnvBridge;
 import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -478,6 +479,7 @@ public class McpClientManager {
             if (config.getCwd() != null && !config.getCwd().isBlank()) {
                 pb.directory(new File(config.getCwd()));
             }
+            EnvBridge.applyToProcessEnv(pb.environment());
             if (config.getEnv() != null) pb.environment().putAll(config.getEnv());
             Process process = pb.start();
             Thread stderr = new Thread(() -> {

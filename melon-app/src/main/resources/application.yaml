@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: melon
+  output:
+    ansi:
+      enabled: always
   codec:
     max-in-memory-size: 50MB
 

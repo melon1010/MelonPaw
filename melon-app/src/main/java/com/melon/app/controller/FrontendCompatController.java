@@ -4,6 +4,7 @@ import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.app.cron.CronExecutor;
 import com.melon.app.service.AgentStatsService;
+import com.melon.app.service.SecuritySettingsService;
 import com.melon.tools.agent.DelegateExternalAgentTool;
 import com.melon.app.service.ApprovalService;
 import com.melon.core.agent.MultiAgentManager;
@@ -33,16 +34,19 @@ public class FrontendCompatController {
     private final MultiAgentManager multiAgentManager;
     private final CronExecutor cronExecutor;
     private final AgentStatsService agentStatsService;
+    private final SecuritySettingsService securitySettingsService;
 
     public FrontendCompatController(ConfigManager configManager, ApprovalService approvalService,
                                     MultiAgentManager multiAgentManager,
                                     CronExecutor cronExecutor,
-                                    AgentStatsService agentStatsService) {
+                                    AgentStatsService agentStatsService,
+                                    SecuritySettingsService securitySettingsService) {
         this.configManager = configManager;
         this.approvalService = approvalService;
         this.multiAgentManager = multiAgentManager;
         this.cronExecutor = cronExecutor;
         this.agentStatsService = agentStatsService;
+        this.securitySettingsService = securitySettingsService;
     }
 
     @GetMapping("/version")
@@ -252,14 +256,16 @@ public class FrontendCompatController {
     public Mono<ResponseEntity<?>> toolGuard(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         AgentConfig config = configManager.getConfig().getAgent(AgentRequestSupport.agentId(agentId));
         String level = config != null && config.getApproval() != null ? config.getApproval().getLevel() : "AUTO";
-        boolean strict = "STRICT".equalsIgnoreCase(level);
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "enabled", !"OFF".equalsIgnoreCase(level),
-                "approval_level", level,
-                "rules", strict ? List.of("strict_builtin_tools") : List.of("shell_delete_commands"),
-                "builtin_tools_require_approval", strict,
-                "delete_commands_require_approval", !"OFF".equalsIgnoreCase(level)
-        )));
+        Map<String, Object> result = new LinkedHashMap<>(storedToolGuard(config));
+        result.put("enabled", !"OFF".equalsIgnoreCase(level));
+        result.put("approval_level", level);
+        result.putIfAbsent("guarded_tools", null);
+        result.putIfAbsent("denied_tools", List.of());
+        result.putIfAbsent("custom_rules", List.of());
+        result.putIfAbsent("disabled_rules", List.of());
+        result.putIfAbsent("auto_denied_rules", List.of());
+        result.putIfAbsent("shell_evasion_checks", Map.of());
+        return Mono.just(ResponseEntity.ok(result));
     }
 
     @PutMapping("/config/security/tool-guard")
@@ -270,9 +276,16 @@ public class FrontendCompatController {
         if (config == null) {
             return Mono.just(ResponseEntity.notFound().build());
         }
+        Map<String, Object> frontend = new LinkedHashMap<>(config.getFrontendRunningConfig() != null
+                ? config.getFrontendRunningConfig()
+                : Map.of());
+        frontend.put("tool_guard_config", body != null ? new LinkedHashMap<>(body) : Map.of());
+        config.setFrontendRunningConfig(frontend);
         String level = body != null && body.get("approval_level") != null
                 ? String.valueOf(body.get("approval_level"))
-                : (Boolean.TRUE.equals(body != null ? body.get("enabled") : null) ? "STRICT" : "AUTO");
+                : (Boolean.FALSE.equals(body != null ? body.get("enabled") : null)
+                    ? "OFF"
+                    : ("OFF".equalsIgnoreCase(config.getApproval().getLevel()) ? "AUTO" : config.getApproval().getLevel()));
         config.getApproval().setLevel(normalizeApprovalLevel(level));
         configManager.save();
         multiAgentManager.reload(id);
@@ -286,60 +299,64 @@ public class FrontendCompatController {
 
     @GetMapping("/config/security/file-guard")
     public Mono<ResponseEntity<?>> fileGuard() {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", false, "rules", List.of())));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.fileGuard()));
     }
 
     @PutMapping("/config/security/file-guard")
     public Mono<ResponseEntity<?>> updateFileGuard(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("enabled", false)));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.saveFileGuard(body)));
     }
 
     @GetMapping("/config/security/skill-scanner")
     public Mono<ResponseEntity<?>> skillScanner() {
-        return Mono.just(ResponseEntity.ok(Map.of("mode", "warn", "timeout", 10, "whitelist", List.of())));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.skillScanner()));
     }
 
     @PutMapping("/config/security/skill-scanner")
     public Mono<ResponseEntity<?>> updateSkillScanner(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("mode", "warn", "timeout", 10, "whitelist", List.of())));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.saveSkillScanner(body)));
     }
 
     @GetMapping("/config/security/skill-scanner/blocked-history")
     public Mono<ResponseEntity<?>> blockedSkillHistory() {
-        return Mono.just(ResponseEntity.ok(List.of()));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.blockedHistory()));
     }
 
     @DeleteMapping("/config/security/skill-scanner/blocked-history")
     public Mono<ResponseEntity<?>> clearBlockedSkillHistory() {
+        securitySettingsService.clearBlockedHistory();
         return Mono.just(ResponseEntity.ok(Map.of("cleared", true)));
     }
 
     @DeleteMapping("/config/security/skill-scanner/blocked-history/{index}")
     public Mono<ResponseEntity<?>> removeBlockedSkillEntry(@PathVariable int index) {
-        return Mono.just(ResponseEntity.ok(Map.of("removed", false)));
+        return Mono.just(ResponseEntity.ok(Map.of("removed", securitySettingsService.removeBlockedEntry(index))));
     }
 
     @PostMapping("/config/security/skill-scanner/whitelist")
     public Mono<ResponseEntity<?>> addSkillScannerWhitelist(@RequestBody(required = false) Map<String, Object> body) {
+        String skillName = body != null ? stringValue(body.get("skill_name"), "") : "";
+        String contentHash = body != null ? stringValue(body.get("content_hash"), "") : "";
+        Map<String, Object> entry = securitySettingsService.addWhitelist(skillName, contentHash);
         return Mono.just(ResponseEntity.ok(Map.of(
                 "whitelisted", true,
-                "skill_name", body != null ? stringValue(body.get("skill_name"), "") : ""
+                "skill_name", entry.get("skill_name")
         )));
     }
 
     @DeleteMapping("/config/security/skill-scanner/whitelist/{skillName}")
     public Mono<ResponseEntity<?>> removeSkillScannerWhitelist(@PathVariable String skillName) {
-        return Mono.just(ResponseEntity.ok(Map.of("removed", true, "skill_name", skillName)));
+        return Mono.just(ResponseEntity.ok(Map.of("removed", securitySettingsService.removeWhitelist(skillName), "skill_name", skillName)));
     }
 
     @GetMapping("/config/security/allow-no-auth-hosts")
     public Mono<ResponseEntity<?>> allowNoAuthHosts() {
-        return Mono.just(ResponseEntity.ok(Map.of("hosts", List.of())));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.allowNoAuthHosts()));
     }
 
     @PutMapping("/config/security/allow-no-auth-hosts")
     public Mono<ResponseEntity<?>> updateAllowNoAuthHosts(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(body != null ? body : Map.of("hosts", List.of())));
+        return Mono.just(ResponseEntity.ok(securitySettingsService.saveAllowNoAuthHosts(body)));
     }
 
     @GetMapping("/local-models/config")
@@ -623,5 +640,15 @@ public class FrontendCompatController {
             case "OFF", "AUTO", "SMART", "STRICT" -> normalized;
             default -> "AUTO";
         };
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> storedToolGuard(AgentConfig config) {
+        if (config == null || config.getFrontendRunningConfig() == null) return Map.of();
+        Object raw = config.getFrontendRunningConfig().get("tool_guard_config");
+        if (!(raw instanceof Map<?, ?> map)) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
     }
 }

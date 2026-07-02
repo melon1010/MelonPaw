@@ -4,6 +4,7 @@ import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
 import io.agentscope.core.message.ToolResultBlock;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.melon.core.env.EnvBridge;
 import com.melon.core.util.PlatformUtil;
 import com.melon.core.util.WorkspacePathResolver;
 import reactor.core.publisher.Mono;
@@ -115,6 +116,7 @@ public class ExecuteShellCommandTool extends ToolBase {
             pb.directory(pathResolver.resolveOptional(null).toFile());
         }
         pb.redirectErrorStream(true);
+        EnvBridge.applyToProcessEnv(pb.environment());
 
         Process process = pb.start();
 

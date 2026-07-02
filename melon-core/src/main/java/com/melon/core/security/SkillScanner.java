@@ -95,7 +95,8 @@ public class SkillScanner {
                 if (matched.length() > 80) {
                     matched = matched.substring(0, 80) + "...";
                 }
-                result.addIssue("Dangerous pattern detected: " + pattern.pattern().substring(0, 30)
+                String patternText = pattern.pattern();
+                result.addIssue("Dangerous pattern detected: " + patternText.substring(0, Math.min(30, patternText.length()))
                         + "... matched: " + matched);
             }
         }

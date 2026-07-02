@@ -2,6 +2,7 @@ package com.melon.app.controller;
 
 import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.agent.WorkspaceManager;
+import com.melon.app.service.FileGuardService;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import org.slf4j.Logger;
@@ -45,12 +46,14 @@ public class WorkspaceController {
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
     private final MultiAgentManager multiAgentManager;
+    private final FileGuardService fileGuardService;
 
     public WorkspaceController(ConfigManager configManager, WorkspaceManager workspaceManager,
-                               MultiAgentManager multiAgentManager) {
+                               MultiAgentManager multiAgentManager, FileGuardService fileGuardService) {
         this.configManager = configManager;
         this.workspaceManager = workspaceManager;
         this.multiAgentManager = multiAgentManager;
+        this.fileGuardService = fileGuardService;
     }
 
     /**
@@ -435,6 +438,7 @@ public class WorkspaceController {
             Path workspace = resolveWorkspace(agentId);
             String cleanName = cleanCapturedPath(fileName);
             Path file = resolveWorkingMarkdownFile(workspace, cleanName);
+            fileGuardService.assertAllowed(file);
             if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
             }
@@ -451,6 +455,7 @@ public class WorkspaceController {
             Files.createDirectories(workspace);
             String cleanName = cleanCapturedPath(fileName);
             Path file = resolveWorkingMarkdownFile(workspace, cleanName);
+            fileGuardService.assertAllowed(file);
             Files.writeString(file, String.valueOf(body.getOrDefault("content", "")));
             return ResponseEntity.ok(Map.of("written", true));
         });
@@ -482,6 +487,7 @@ public class WorkspaceController {
         return Mono.fromCallable(() -> {
             Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
+            fileGuardService.assertAllowed(file);
             if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
             }
@@ -499,6 +505,7 @@ public class WorkspaceController {
         return Mono.fromCallable(() -> {
             Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
+            fileGuardService.assertAllowed(file);
             Files.createDirectories(file.getParent());
             Files.writeString(file, String.valueOf(body.getOrDefault("content", "")));
             return ResponseEntity.ok(Map.of(
@@ -514,6 +521,7 @@ public class WorkspaceController {
         return Mono.fromCallable(() -> {
             Path workspace = resolveWorkspace(agentId);
             Path file = resolveInside(workspace, cleanCapturedPath(filePath));
+            fileGuardService.assertAllowed(file);
             if (!Files.exists(file) || Files.isDirectory(file)) {
                 return ResponseEntity.notFound().build();
             }
@@ -552,6 +560,7 @@ public class WorkspaceController {
                                                        @RequestPart("file") FilePart filePart) {
         Path workspace = resolveWorkspace(agentId);
         Path target = resolveInside(workspace, filePart.filename());
+        fileGuardService.assertAllowed(target);
         try {
             Files.createDirectories(target.getParent());
         } catch (IOException e) {
@@ -568,8 +577,27 @@ public class WorkspaceController {
     }
 
     @PutMapping("/system-prompt-files")
-    public Mono<ResponseEntity<?>> updateSystemPromptFiles(@RequestBody List<String> files) {
-        return Mono.just(ResponseEntity.ok(files != null ? files : List.of()));
+    public Mono<ResponseEntity<?>> updateSystemPromptFiles(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                           @RequestBody List<String> files) {
+        return Mono.fromCallable(() -> {
+            String id = AgentRequestSupport.agentId(agentId);
+            AgentConfig agentConfig = configManager.getConfig().getAgent(id);
+            if (agentConfig == null) {
+                return ResponseEntity.notFound().build();
+            }
+            List<String> cleanFiles = files == null ? List.of() : files.stream()
+                    .map(String::valueOf)
+                    .map(String::trim)
+                    .filter(value -> !value.isBlank())
+                    .map(value -> Path.of(value).getFileName().toString())
+                    .filter(value -> value.endsWith(".md"))
+                    .distinct()
+                    .toList();
+            agentConfig.setSystemPromptFiles(cleanFiles);
+            configManager.save();
+            multiAgentManager.reload(id);
+            return ResponseEntity.ok(cleanFiles);
+        });
     }
 
     @GetMapping(value = "/watch", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

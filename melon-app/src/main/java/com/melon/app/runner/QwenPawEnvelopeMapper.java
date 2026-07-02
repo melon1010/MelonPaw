@@ -78,6 +78,22 @@ public class QwenPawEnvelopeMapper {
         return List.of(sse("response", tag(response)), sse("response", tag(inProgress)));
     }
 
+    public List<ServerSentEvent<String>> completeWithText(String text) {
+        if (finalized) return List.of();
+        finalized = true;
+        List<ServerSentEvent<String>> events = new ArrayList<>(start());
+        String messageId = newMessageId();
+        Map<String, Object> content = textContent(text != null ? text : "", false, 0);
+        events.add(messageEvent(messageId, "message", "assistant", "in_progress", List.of()));
+        events.add(contentEvent(messageId, "text", Map.of("text", text != null ? text : ""), false, "completed", 0));
+        events.add(completedMessageEvent(messageId, "message", "assistant", List.of(content)));
+        Map<String, Object> completed = response("completed");
+        completed.put("completed_at", System.currentTimeMillis() / 1000);
+        completed.put("output", new ArrayList<>(outputMessages));
+        events.add(sse("response", tag(completed)));
+        return events;
+    }
+
     public List<ServerSentEvent<String>> translate(AgentEvent event) {
         return switch (event.getType()) {
             case TEXT_BLOCK_START -> textStart((TextBlockStartEvent) event);

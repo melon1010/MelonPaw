@@ -1,6 +1,7 @@
 package com.melon.tools.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.melon.core.env.EnvBridge;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
@@ -152,6 +153,7 @@ public class DelegateExternalAgentTool extends ToolBase {
             cmd.add(command);
             cmd.addAll(args);
             ProcessBuilder pb = new ProcessBuilder(cmd).directory(new File(cwd)).redirectErrorStream(true);
+            EnvBridge.applyToProcessEnv(pb.environment());
             Object env = config.get("env");
             if (env instanceof Map<?, ?> map) {
                 map.forEach((k, v) -> pb.environment().put(String.valueOf(k), String.valueOf(v)));

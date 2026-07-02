@@ -121,6 +121,21 @@ public class BackupService {
         return false;
     }
 
+    public Path importBackup(Path source, String originalName) throws IOException {
+        if (source == null || !Files.isRegularFile(source)) {
+            throw new NoSuchFileException("Backup file not found: " + source);
+        }
+        String filename = sanitizeBackupName(originalName);
+        validateZip(source);
+        Path target = backupDir.resolve(filename).normalize();
+        if (!target.startsWith(backupDir.normalize())) {
+            throw new SecurityException("Cannot import backup outside backup directory");
+        }
+        Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+        log.info("Backup imported: {}", target);
+        return target;
+    }
+
     /**
      * 递归添加文件到 zip.
      */
@@ -144,5 +159,27 @@ public class BackupService {
                 }
             }
         }
+    }
+
+    private void validateZip(Path zipFile) throws IOException {
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFile))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path target = melonHome.resolve(entry.getName()).normalize();
+                if (!target.startsWith(melonHome.normalize())) {
+                    throw new SecurityException("Suspicious path in backup: " + entry.getName());
+                }
+                zis.closeEntry();
+            }
+        }
+    }
+
+    private String sanitizeBackupName(String name) {
+        String value = name == null || name.isBlank()
+                ? "melon-backup-imported.zip"
+                : Path.of(name).getFileName().toString();
+        value = value.replaceAll("[^A-Za-z0-9._-]", "-");
+        if (!value.endsWith(".zip")) value += ".zip";
+        return value.isBlank() ? "melon-backup-imported.zip" : value;
     }
 }

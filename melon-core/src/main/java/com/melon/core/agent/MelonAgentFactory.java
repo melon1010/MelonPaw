@@ -19,6 +19,7 @@ import io.agentscope.core.state.JsonFileAgentStateStore;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ContextCompactConfig;
 import com.melon.core.middleware.*;
+import com.melon.core.provider.ProviderManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,19 +39,36 @@ public class MelonAgentFactory {
     private static final Logger log = LoggerFactory.getLogger(MelonAgentFactory.class);
     private final MultiAgentManager agentManager;
     private final TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback;
+    private final List<ToolkitContributor> toolkitContributors;
+    private final ProviderManager providerManager;
 
     public MelonAgentFactory() {
-        this(null, null);
+        this(null, null, List.of(), null);
     }
 
     public MelonAgentFactory(MultiAgentManager agentManager) {
-        this(agentManager, null);
+        this(agentManager, null, List.of(), null);
     }
 
     public MelonAgentFactory(MultiAgentManager agentManager,
                              TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback) {
+        this(agentManager, tokenUsageCallback, List.of(), null);
+    }
+
+    public MelonAgentFactory(MultiAgentManager agentManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback,
+                             List<ToolkitContributor> toolkitContributors) {
+        this(agentManager, tokenUsageCallback, toolkitContributors, null);
+    }
+
+    public MelonAgentFactory(MultiAgentManager agentManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback,
+                             List<ToolkitContributor> toolkitContributors,
+                             ProviderManager providerManager) {
         this.agentManager = agentManager;
         this.tokenUsageCallback = tokenUsageCallback;
+        this.toolkitContributors = toolkitContributors != null ? List.copyOf(toolkitContributors) : List.of();
+        this.providerManager = providerManager;
     }
 
     /**
@@ -75,13 +93,12 @@ public class MelonAgentFactory {
         MemoryConfig memoryConfig = buildMemoryConfig(agentConfig);
 
         // 4. 注册 QwenPaw 命名工具，避免 Harness 默认 execute/grep_files/glob_files 名称进入前端历史。
-        Toolkit toolkit = buildToolkit(agentConfig, workspaceDir);
+        Toolkit toolkit = buildToolkit(agentId, agentConfig, workspaceDir);
 
         // 4. 构建 HarnessAgent
         HarnessAgent.Builder builder = HarnessAgent.builder()
                 .name(agentConfig.getName())
                 .agentId(agentId)
-                .model(activeModel)
                 .toolkit(toolkit)
                 .workspace(workspaceDir)
                 .filesystem(new LocalFilesystemSpec()
@@ -103,6 +120,11 @@ public class MelonAgentFactory {
                 .enableTaskList(agentConfig.getRunning().isTaskListEnabled())
                 .disableShellTool()
                 .disableFilesystemTools();
+        if (providerManager != null) {
+            builder.model(providerManager.createModel(activeModel));
+        } else {
+            builder.model(activeModel);
+        }
 
         if (agentConfig.getPlanMode().isEnabled()) {
             builder.enablePlanMode(true);
@@ -115,7 +137,7 @@ public class MelonAgentFactory {
         return builder.build();
     }
 
-    private Toolkit buildToolkit(AgentConfig config, Path workspaceDir) {
+    private Toolkit buildToolkit(String agentId, AgentConfig config, Path workspaceDir) {
         Toolkit toolkit = new Toolkit();
         registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool",
                 workspaceDir.toString(),
@@ -141,6 +163,13 @@ public class MelonAgentFactory {
         registerIfEnabled(toolkit, config, "check_agent_task", "com.melon.tools.agent.CheckAgentTaskTool");
         registerIfEnabled(toolkit, config, "spawn_subagent", "com.melon.tools.agent.SpawnSubagentTool");
         registerIfEnabled(toolkit, config, "delegate_external_agent", "com.melon.tools.agent.DelegateExternalAgentTool", workspaceDir);
+        for (ToolkitContributor contributor : toolkitContributors) {
+            try {
+                contributor.contribute(agentId, config, workspaceDir, toolkit);
+            } catch (Exception e) {
+                log.warn("Toolkit contributor {} failed for agent {}", contributor.getClass().getName(), agentId, e);
+            }
+        }
         log.info("QwenPaw toolkit registered tools: {}", toolkit.getToolNames());
         return toolkit;
     }

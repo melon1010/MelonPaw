@@ -3,6 +3,8 @@ package com.melon.app.service;
 import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.security.ScanResult;
+import com.melon.core.security.SkillScanner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,10 +32,14 @@ public class SkillService {
 
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
+    private final SecuritySettingsService securitySettingsService;
+    private final SkillScanner skillScanner = new SkillScanner();
 
-    public SkillService(ConfigManager configManager, WorkspaceManager workspaceManager) {
+    public SkillService(ConfigManager configManager, WorkspaceManager workspaceManager,
+                        SecuritySettingsService securitySettingsService) {
         this.configManager = configManager;
         this.workspaceManager = workspaceManager;
+        this.securitySettingsService = securitySettingsService;
     }
 
     /**
@@ -76,6 +82,14 @@ public class SkillService {
                 skill.put("content", content);
                 skill.put("enabled", !Files.exists(dir.resolve(".disabled")));
                 skill.put("source", meta.getOrDefault("source", "local"));
+                skill.put("version_text", stringValue(meta.get("version_text")));
+                skill.put("commit_text", stringValue(meta.get("commit_text")));
+                skill.put("protected", Boolean.TRUE.equals(meta.get("protected")));
+                skill.put("external", Boolean.TRUE.equals(meta.get("external")));
+                skill.put("external_path", stringValue(meta.get("external_path")));
+                skill.put("builtin_language", stringValue(meta.get("builtin_language")));
+                skill.put("available_builtin_languages", stringList(meta.get("available_builtin_languages")));
+                skill.put("installed_from", stringValue(meta.get("installed_from")));
                 skill.put("channels", stringList(meta.get("channels")));
                 skill.put("tags", stringList(meta.get("tags")));
                 skill.put("config", mapValue(meta.get("config")));
@@ -321,6 +335,7 @@ public class SkillService {
                     conflicts.add(importConflict(finalName, existing));
                     continue;
                 }
+                scanImportedSkill(finalName, source);
                 plans.add(new SkillImportPlan(source, finalName));
             }
 
@@ -378,6 +393,21 @@ public class SkillService {
             }
         } catch (java.util.zip.ZipException e) {
             throw new IOException("Invalid zip archive", e);
+        }
+    }
+
+    private void scanImportedSkill(String skillName, Path source) throws IOException {
+        Map<String, Object> scannerConfig = securitySettingsService.skillScanner();
+        if ("off".equals(scannerConfig.get("mode"))) {
+            return;
+        }
+        ScanResult scanResult = SkillScanner.mergeResults(skillName, skillScanner.scanDirectory(source));
+        if (securitySettingsService.shouldBlockSkill(skillName, scanResult)) {
+            securitySettingsService.recordBlockedSkill(skillName, scanResult, "blocked");
+            throw new IOException("Skill failed security scan: " + scanResult.getIssues());
+        }
+        if (scanResult != null && (!scanResult.isSafe() || !scanResult.getWarnings().isEmpty())) {
+            securitySettingsService.recordBlockedSkill(skillName, scanResult, "warned");
         }
     }
 
@@ -515,6 +545,10 @@ public class SkillService {
             return list.stream().map(String::valueOf).filter(s -> !s.isBlank()).toList();
         }
         return List.of();
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private Path skillsDir(String agentId) {

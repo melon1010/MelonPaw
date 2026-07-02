@@ -3,6 +3,7 @@ package com.melon.app.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.env.EnvBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,7 @@ public class EnvService {
             if (!Files.exists(envsFile)) {
                 saveEnvs(new LinkedHashMap<>());
             }
+            EnvBridge.injectAll(listEnvs());
         } catch (IOException e) {
             log.warn("Failed to initialize envs file: {}", envsFile);
         }
@@ -85,6 +87,7 @@ public class EnvService {
         Map<String, String> envs = new LinkedHashMap<>(listEnvs());
         if (envs.remove(key) != null) {
             saveEnvs(envs);
+            System.clearProperty(key);
             log.info("Env deleted: {}", key);
             return true;
         }
@@ -100,6 +103,7 @@ public class EnvService {
             Path tmp = envsFile.resolveSibling("envs.json.tmp");
             mapper.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), envs);
             Files.move(tmp, envsFile, StandardCopyOption.REPLACE_EXISTING);
+            EnvBridge.injectAll(envs);
         } catch (IOException e) {
             log.error("Failed to save envs to {}", envsFile, e);
         }

@@ -27,10 +27,13 @@ public class FileService {
 
     private final ConfigManager configManager;
     private final WorkspaceManager workspaceManager;
+    private final FileGuardService fileGuardService;
 
-    public FileService(ConfigManager configManager, WorkspaceManager workspaceManager) {
+    public FileService(ConfigManager configManager, WorkspaceManager workspaceManager,
+                       FileGuardService fileGuardService) {
         this.configManager = configManager;
         this.workspaceManager = workspaceManager;
+        this.fileGuardService = fileGuardService;
     }
 
     /**
@@ -45,6 +48,7 @@ public class FileService {
         if (!Files.exists(target)) {
             throw new NoSuchFileException("Path not found: " + dirPath);
         }
+        fileGuardService.assertAllowed(target);
 
         List<Map<String, Object>> result = new ArrayList<>();
         if (Files.isDirectory(target)) {
@@ -69,6 +73,7 @@ public class FileService {
         if (!Files.exists(target)) {
             throw new NoSuchFileException("File not found: " + filePath);
         }
+        fileGuardService.assertAllowed(target);
         long size = Files.size(target);
         if (size > MAX_FILE_SIZE) {
             throw new IOException("File too large: " + size + " bytes");
@@ -93,6 +98,7 @@ public class FileService {
         }
 
         Path targetFile = destPath.resolve(filePart.filename());
+        fileGuardService.assertAllowed(targetFile);
         return filePart.transferTo(targetFile)
             .map(success -> {
                 log.info("File uploaded: {} ({} bytes)", targetFile, success);
@@ -125,6 +131,7 @@ public class FileService {
         if (!Files.exists(target)) {
             throw new NoSuchFileException("File not found: " + filePath);
         }
+        fileGuardService.assertAllowed(target);
 
         // Move to trash directory instead of permanent deletion
         Path trashDir = workspace.resolve(".trash");

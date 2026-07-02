@@ -4,6 +4,7 @@ import com.melon.core.config.ConfigManager;
 import com.melon.core.config.ToolsConfig;
 import com.melon.core.config.BuiltinToolConfig;
 import com.melon.core.config.AgentConfig;
+import com.melon.core.agent.MultiAgentManager;
 import com.melon.app.runner.FrontendToolCompat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,11 @@ public class ToolController {
     private static final Logger log = LoggerFactory.getLogger(ToolController.class);
 
     private final ConfigManager configManager;
+    private final MultiAgentManager multiAgentManager;
 
-    public ToolController(ConfigManager configManager) {
+    public ToolController(ConfigManager configManager, MultiAgentManager multiAgentManager) {
         this.configManager = configManager;
+        this.multiAgentManager = multiAgentManager;
     }
 
     /**
@@ -69,6 +72,7 @@ public class ToolController {
 
                 tool.setEnabled(enabled);
                 configManager.save();
+                multiAgentManager.reload(AgentRequestSupport.agentId(agentId));
                 log.info("Tool '{}' enabled={}", toolName, enabled);
 
                 return ResponseEntity.ok(Map.of("name", toolName, "enabled", enabled));
@@ -96,6 +100,7 @@ public class ToolController {
             boolean enabled = rawEnabled instanceof Boolean b ? b : !tool.isEnabled();
             tool.setEnabled(enabled);
             configManager.save();
+            multiAgentManager.reload(AgentRequestSupport.agentId(agentId));
             return ResponseEntity.ok(toolInfo(toolName, tool));
         });
     }
@@ -117,6 +122,7 @@ public class ToolController {
             if (rawEnabled instanceof Boolean b) {
                 tool.setAsyncExecution(b);
                 configManager.save();
+                multiAgentManager.reload(AgentRequestSupport.agentId(agentId));
             }
             return ResponseEntity.ok(toolInfo(toolName, tool));
         });
@@ -157,6 +163,7 @@ public class ToolController {
                     tool.setConfig(values);
                 }
                 configManager.save();
+                multiAgentManager.reload(AgentRequestSupport.agentId(agentId));
             }
             return ResponseEntity.ok(Map.of("status", "ok", "message", "updated", "tool", toolInfo(toolName, tool)));
         });

@@ -7,6 +7,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -29,10 +31,7 @@ public class EnvController {
      */
     @GetMapping
     public Mono<ResponseEntity<?>> listEnvs() {
-        return Mono.fromCallable(() -> {
-            Map<String, String> envs = envService.listEnvs();
-            return ResponseEntity.ok(envs);
-        });
+        return Mono.fromCallable(() -> ResponseEntity.ok(envList()));
     }
 
     @PutMapping
@@ -44,7 +43,7 @@ public class EnvController {
             if (body != null) {
                 body.forEach(envService::setEnv);
             }
-            return ResponseEntity.ok(envService.listEnvs());
+            return ResponseEntity.ok(envList());
         });
     }
 
@@ -71,14 +70,18 @@ public class EnvController {
             @RequestBody Map<String, String> body) {
         return Mono.fromCallable(() -> {
             try {
+                if (body == null) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("detail", "'value' field is required"));
+                }
                 String value = body.get("value");
                 if (value == null) {
                     return ResponseEntity.badRequest()
-                            .body(Map.of("error", "'value' field is required"));
+                            .body(Map.of("detail", "'value' field is required"));
                 }
                 envService.setEnv(key, value);
                 log.info("Env updated: {}", key);
-                return ResponseEntity.ok(Map.of("status", "set", "key", key));
+                return ResponseEntity.ok(envList());
             } catch (Exception e) {
                 log.error("Failed to set env: {}", key, e);
                 return ResponseEntity.internalServerError()
@@ -93,11 +96,19 @@ public class EnvController {
     @DeleteMapping("/{key}")
     public Mono<ResponseEntity<?>> deleteEnv(@PathVariable String key) {
         return Mono.fromCallable(() -> {
-            boolean deleted = envService.deleteEnv(key);
-            if (!deleted) {
-                return ResponseEntity.notFound().build();
-            }
-            return ResponseEntity.ok(Map.of("status", "deleted", "key", key));
+            envService.deleteEnv(key);
+            return ResponseEntity.ok(envList());
         });
+    }
+
+    private List<Map<String, String>> envList() {
+        return envService.listEnvs().entrySet().stream()
+                .map(entry -> {
+                    Map<String, String> item = new LinkedHashMap<>();
+                    item.put("key", entry.getKey());
+                    item.put("value", entry.getValue() == null ? "" : entry.getValue());
+                    return item;
+                })
+                .toList();
     }
 }

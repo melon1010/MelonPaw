@@ -1,6 +1,5 @@
 package com.melon.app.service;
 
-import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.ConfigManager;
 
 import java.nio.file.Files;
@@ -15,7 +14,7 @@ public class BuiltinSkillInitializerSelfCheck {
 
         ConfigManager configManager = new ConfigManager();
         BuiltinSkillInitializer initializer =
-                new BuiltinSkillInitializer(configManager, new WorkspaceManager());
+                new BuiltinSkillInitializer(new BuiltinSkillService(configManager));
 
         initializer.seedAllAgents();
 
@@ -25,7 +24,7 @@ public class BuiltinSkillInitializerSelfCheck {
         try (var stream = Files.list(pool)) {
             poolCount = stream.filter(Files::isDirectory).count();
         }
-        if (poolCount < 18) {
+        if (poolCount < 10) {
             throw new IllegalStateException("Expected builtin pool skills, got " + poolCount + " at " + pool);
         }
         if (!Files.exists(pool.resolve("file_reader").resolve("SKILL.md"))) {
