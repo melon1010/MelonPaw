@@ -19,7 +19,7 @@ public class AgentConfig {
     private boolean enabled = true;
 
     @JsonProperty("active_model")
-    private String activeModel = "dashscope:qwen-plus";
+    private String activeModel = "";
 
     @JsonProperty("workspace_dir")
     private String workspaceDir;

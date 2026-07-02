@@ -5,7 +5,6 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.*;
@@ -24,13 +23,16 @@ public class ConfigWatcher {
     private static final Logger log = LoggerFactory.getLogger(ConfigWatcher.class);
     private static final long DEBOUNCE_MS = 1000; // 防抖间隔
 
-    @Autowired
-    private ConfigManager configManager;
+    private final ConfigManager configManager;
 
     private WatchService watchService;
     private Thread watchThread;
     private volatile boolean running = false;
     private volatile long lastReloadTime = 0;
+
+    public ConfigWatcher(ConfigManager configManager) {
+        this.configManager = configManager;
+    }
 
     @PostConstruct
     public void start() {

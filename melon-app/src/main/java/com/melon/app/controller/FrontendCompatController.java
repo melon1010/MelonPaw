@@ -11,6 +11,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * Compatibility endpoints for QwenPaw frontend pages whose deep backend
  * behavior is intentionally not implemented yet.
@@ -423,12 +425,6 @@ public class FrontendCompatController {
     @PutMapping("/coding-mode")
     public Mono<ResponseEntity<?>> updateCodingMode(@RequestBody(required = false) Map<String, Object> body) {
         return Mono.just(ResponseEntity.ok(Map.of("enabled", body == null || Boolean.TRUE.equals(body.getOrDefault("enabled", true)))));
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
     }
 
     @SuppressWarnings("unchecked")

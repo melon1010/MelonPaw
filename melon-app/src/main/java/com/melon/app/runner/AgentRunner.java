@@ -11,7 +11,6 @@ import com.melon.core.agent.MultiAgentManager;
 import com.melon.app.service.ApprovalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -19,6 +18,8 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Map;
+
+import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
  * 请求→Agent 调用编排. 对应 Python runner/runner.py 的 query_handler.
@@ -29,11 +30,13 @@ public class AgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AgentRunner.class);
 
-    @Autowired
-    private MultiAgentManager multiAgentManager;
+    private final MultiAgentManager multiAgentManager;
+    private final ApprovalService approvalService;
 
-    @Autowired
-    private ApprovalService approvalService;
+    public AgentRunner(MultiAgentManager multiAgentManager, ApprovalService approvalService) {
+        this.multiAgentManager = multiAgentManager;
+        this.approvalService = approvalService;
+    }
 
     /**
      * 流式查询. 对应 Python _stream_printing_messages_interruptible.
@@ -86,13 +89,16 @@ public class AgentRunner {
     }
 
     private RuntimeContext buildContext(String userId, String sessionId, Map<String, Object> envInfo) {
+        String sid = sessionId != null ? sessionId : "default";
         RuntimeContext.Builder builder = RuntimeContext.builder()
-                .sessionId(sessionId != null ? sessionId : "default");
+                .sessionId(sid);
+
+        builder.put("session_id", sid);
+        if (userId != null) {
+            builder.put("user_id", userId);
+        }
 
         if (envInfo != null) {
-            if (userId != null) {
-                builder.put("user_id", userId);
-            }
             if (envInfo.get("agent_id") != null) {
                 builder.put("agent_id", envInfo.get("agent_id"));
             }
@@ -144,12 +150,6 @@ public class AgentRunner {
         approval.put("created_at", System.currentTimeMillis() / 1000.0);
         approval.put("timeout_seconds", 300);
         return approval;
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
     }
 
 }

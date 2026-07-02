@@ -5,7 +5,6 @@ import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import com.melon.app.service.SkillService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -14,11 +13,13 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+
+import static com.melon.core.util.ValueUtils.booleanValue;
+import static com.melon.core.util.ValueUtils.stringList;
+import static com.melon.core.util.ValueUtils.trimmedStringValue;
 
 /**
  * Agent 管理 CRUD. 对应 Python /api/agents.
@@ -27,17 +28,20 @@ import java.util.Set;
 @RequestMapping("/api/agents")
 public class AgentManagementController {
 
-    @Autowired
-    private ConfigManager configManager;
+    private final ConfigManager configManager;
+    private final WorkspaceManager workspaceManager;
+    private final MultiAgentManager multiAgentManager;
+    private final SkillService skillService;
 
-    @Autowired
-    private WorkspaceManager workspaceManager;
-
-    @Autowired
-    private MultiAgentManager multiAgentManager;
-
-    @Autowired
-    private SkillService skillService;
+    public AgentManagementController(ConfigManager configManager,
+                                     WorkspaceManager workspaceManager,
+                                     MultiAgentManager multiAgentManager,
+                                     SkillService skillService) {
+        this.configManager = configManager;
+        this.workspaceManager = workspaceManager;
+        this.multiAgentManager = multiAgentManager;
+        this.skillService = skillService;
+    }
 
     @GetMapping
     public Mono<ResponseEntity<?>> list() {
@@ -61,16 +65,16 @@ public class AgentManagementController {
     @PostMapping
     public Mono<ResponseEntity<?>> create(@RequestBody(required = false) Map<String, Object> body) {
         return Mono.fromCallable(() -> {
-            String id = sanitizeId(stringValue(value(body, "id", "agent_id", "name"), "agent"));
+            String id = sanitizeId(trimmedStringValue(value(body, "id", "agent_id", "name"), "agent"));
             Map<String, AgentConfig> agents = mutableAgents();
             if (agents.containsKey(id)) {
                 return ResponseEntity.status(409).body(Map.of("detail", "Agent already exists: " + id));
             }
             AgentConfig agent = new AgentConfig();
-            agent.setName(stringValue(body != null ? body.get("name") : null, id));
-            agent.setDescription(stringValue(body != null ? body.get("description") : null, ""));
+            agent.setName(trimmedStringValue(body != null ? body.get("name") : null, id));
+            agent.setDescription(trimmedStringValue(body != null ? body.get("description") : null, ""));
             agent.setEnabled(booleanValue(body != null ? body.get("enabled") : null, true));
-            String workspaceDirValue = stringValue(body != null ? body.get("workspace_dir") : null, "");
+            String workspaceDirValue = trimmedStringValue(body != null ? body.get("workspace_dir") : null, "");
             if (!workspaceDirValue.isBlank()) {
                 agent.setWorkspaceDir(workspaceDirValue);
             }
@@ -109,7 +113,7 @@ public class AgentManagementController {
                 if (body.get("description") != null) agent.setDescription(String.valueOf(body.get("description")));
                 if (body.get("enabled") != null) agent.setEnabled(booleanValue(body.get("enabled"), true));
                 if (body.get("workspace_dir") != null) {
-                    String workspaceDir = stringValue(body.get("workspace_dir"), "");
+                    String workspaceDir = trimmedStringValue(body.get("workspace_dir"), "");
                     agent.setWorkspaceDir(workspaceDir.isBlank() ? null : workspaceDir);
                 }
                 if (body.get("active_model") != null) applyActiveModel(agent, body.get("active_model"));
@@ -232,14 +236,14 @@ public class AgentManagementController {
     @SuppressWarnings("unchecked")
     private void applyActiveModel(AgentConfig agent, Object value) {
         if (value instanceof Map<?, ?> map) {
-            String provider = stringValue(map.get("provider_id"), "");
-            String model = stringValue(map.get("model"), "");
+            String provider = trimmedStringValue(map.get("provider_id"), "");
+            String model = trimmedStringValue(map.get("model"), "");
             if (!provider.isBlank() && !model.isBlank()) {
                 agent.setActiveModel(provider + ":" + model);
             }
             return;
         }
-        String text = stringValue(value, "");
+        String text = trimmedStringValue(value, "");
         if (!text.isBlank()) {
             agent.setActiveModel(text);
         }
@@ -262,28 +266,6 @@ public class AgentManagementController {
 
     private boolean deleteWorkspaceIfSafe(Path workspaceDir) throws IOException {
         return workspaceManager.deleteWorkspaceIfUnderRoot(workspaceDir, configManager.resolveWorkspaceRootDir());
-    }
-
-    private List<String> stringList(Object value) {
-        if (!(value instanceof List<?> list)) return List.of();
-        Set<String> seen = new LinkedHashSet<>();
-        for (Object item : list) {
-            String text = stringValue(item, "");
-            if (!text.isBlank()) seen.add(text);
-        }
-        return new ArrayList<>(seen);
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value).trim();
-        return text.isBlank() ? fallback : text;
-    }
-
-    private boolean booleanValue(Object value, boolean fallback) {
-        if (value == null) return fallback;
-        if (value instanceof Boolean b) return b;
-        return Boolean.parseBoolean(String.valueOf(value));
     }
 
     private String sanitizeId(String raw) {

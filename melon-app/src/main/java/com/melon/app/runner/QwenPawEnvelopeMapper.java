@@ -46,6 +46,8 @@ import java.util.UUID;
 public class QwenPawEnvelopeMapper {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String TURN_USAGE_META_KEY = "qwenpaw_turn_usage";
+    private static final long DEFAULT_MAX_INPUT_LENGTH = 131_072L;
 
     private final String responseId = "response_" + UUID.randomUUID().toString().replace("-", "");
     private final String sessionId;
@@ -105,11 +107,17 @@ public class QwenPawEnvelopeMapper {
         finalized = true;
         List<ServerSentEvent<String>> events = new ArrayList<>();
         events.addAll(finalizeTextMessage());
+        Map<String, Object> turnUsage = turnUsageSnapshot();
+        decorateOutputMessages(turnUsage);
         Map<String, Object> completed = response("completed");
         completed.put("completed_at", System.currentTimeMillis() / 1000);
         completed.put("output", new ArrayList<>(outputMessages));
-        if (usage != null) completed.put("usage", usage);
+        if (turnUsage != null) {
+            completed.put("usage", turnUsage.get("usage"));
+            completed.put("context_usage", turnUsage.get("context_usage"));
+        }
         events.add(sse("response", tag(completed)));
+        if (turnUsage != null) events.add(sse("turn_usage", tag(new LinkedHashMap<>(turnUsage))));
         return events;
     }
 
@@ -117,17 +125,35 @@ public class QwenPawEnvelopeMapper {
         String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
         List<ServerSentEvent<String>> events = new ArrayList<>();
         events.addAll(finalizeTextMessage());
+        Map<String, Object> turnUsage = turnUsageSnapshot();
+        decorateOutputMessages(turnUsage);
         Map<String, Object> failed = response("failed");
         failed.put("completed_at", System.currentTimeMillis() / 1000);
         failed.put("output", new ArrayList<>(outputMessages));
+        if (turnUsage != null) {
+            failed.put("usage", turnUsage.get("usage"));
+            failed.put("context_usage", turnUsage.get("context_usage"));
+        }
         failed.put("error", Map.of("code", "CHAT_ERROR", "message", message));
         events.add(sse("response", tag(failed)));
+        if (turnUsage != null) events.add(sse("turn_usage", tag(new LinkedHashMap<>(turnUsage))));
         finalized = true;
         return events;
     }
 
     public String visibleAssistantText() {
         return visibleAssistantText.toString();
+    }
+
+    public Map<String, Object> turnUsageSnapshot() {
+        Map<String, Object> usagePayload = usagePayload();
+        Map<String, Object> contextUsage = contextUsagePayload(usagePayload);
+        if (usagePayload == null && contextUsage == null) return null;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "turn_usage");
+        payload.put("usage", usagePayload);
+        payload.put("context_usage", contextUsage);
+        return payload;
     }
 
     private List<ServerSentEvent<String>> textStart(TextBlockStartEvent event) {
@@ -298,9 +324,15 @@ public class QwenPawEnvelopeMapper {
         ChatUsage chatUsage = event.getUsage();
         if (chatUsage != null) {
             usage = new LinkedHashMap<>();
-            usage.put("input_tokens", chatUsage.getInputTokens());
-            usage.put("output_tokens", chatUsage.getOutputTokens());
-            usage.put("total_tokens", chatUsage.getTotalTokens());
+            long inputTokens = chatUsage.getInputTokens();
+            long outputTokens = chatUsage.getOutputTokens();
+            long totalTokens = chatUsage.getTotalTokens();
+            usage.put("prompt_tokens", inputTokens);
+            usage.put("completion_tokens", outputTokens);
+            usage.put("total_tokens", totalTokens);
+            usage.put("input_tokens", inputTokens);
+            usage.put("output_tokens", outputTokens);
+            usage.put("estimated", false);
         }
         return List.of();
     }
@@ -382,6 +414,88 @@ public class QwenPawEnvelopeMapper {
         response.put("error", null);
         if (usage != null) response.put("usage", usage);
         return response;
+    }
+
+    private Map<String, Object> usagePayload() {
+        if (usage == null) {
+            long estimated = estimateTextTokens();
+            if (estimated <= 0) return null;
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("prompt_tokens", 0L);
+            fallback.put("completion_tokens", estimated);
+            fallback.put("total_tokens", estimated);
+            fallback.put("estimated", true);
+            return fallback;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        long prompt = numberValue(usage.get("prompt_tokens"), numberValue(usage.get("input_tokens"), 0L));
+        long completion = numberValue(usage.get("completion_tokens"), numberValue(usage.get("output_tokens"), 0L));
+        long total = numberValue(usage.get("total_tokens"), prompt + completion);
+        payload.put("prompt_tokens", prompt);
+        payload.put("completion_tokens", completion);
+        payload.put("total_tokens", total > 0 ? total : prompt + completion);
+        payload.put("estimated", Boolean.TRUE.equals(usage.get("estimated")));
+        return payload;
+    }
+
+    private Map<String, Object> contextUsagePayload(Map<String, Object> usagePayload) {
+        long estimatedTokens = 0L;
+        if (usagePayload != null) {
+            estimatedTokens = numberValue(usagePayload.get("prompt_tokens"), 0L);
+            if (estimatedTokens <= 0) estimatedTokens = numberValue(usagePayload.get("total_tokens"), 0L);
+        }
+        if (estimatedTokens <= 0) estimatedTokens = estimateTextTokens();
+        if (estimatedTokens <= 0) return null;
+
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("estimated_tokens", estimatedTokens);
+        context.put("max_input_length", DEFAULT_MAX_INPUT_LENGTH);
+        context.put("context_usage_ratio", Math.min(100.0, estimatedTokens * 100.0 / DEFAULT_MAX_INPUT_LENGTH));
+        return context;
+    }
+
+    private void decorateOutputMessages(Map<String, Object> turnUsage) {
+        if (turnUsage == null || outputMessages.isEmpty()) return;
+        int lastIndex = outputMessages.size() - 1;
+        decorateOutputMessage(outputMessages.get(lastIndex), turnUsage);
+        for (int i = lastIndex; i >= 0; i--) {
+            Map<String, Object> message = outputMessages.get(i);
+            if ("assistant".equals(message.get("role"))) {
+                decorateOutputMessage(message, turnUsage);
+                return;
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void decorateOutputMessage(Map<String, Object> message, Map<String, Object> turnUsage) {
+        Map<String, Object> metadata = message.get("metadata") instanceof Map<?, ?> raw
+                ? new LinkedHashMap<>((Map<String, Object>) raw)
+                : new LinkedHashMap<>();
+        metadata.put(TURN_USAGE_META_KEY, turnUsage);
+        message.put("metadata", metadata);
+        message.put("usage", turnUsage.get("usage"));
+        message.put("context_usage", turnUsage.get("context_usage"));
+    }
+
+    private long estimateTextTokens() {
+        long chars = visibleAssistantText.length();
+        for (Map<String, Object> message : outputMessages) {
+            chars += toJson(message.get("content")).length();
+        }
+        return chars <= 0 ? 0 : Math.max(1L, (chars + 3L) / 4L);
+    }
+
+    private long numberValue(Object value, long fallback) {
+        if (value instanceof Number number) return number.longValue();
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                return fallback;
+            }
+        }
+        return fallback;
     }
 
     private Map<String, Object> textContent(String text, boolean delta, int index) {

@@ -7,7 +7,6 @@ import com.melon.core.config.AgentConfig;
 import com.melon.app.runner.FrontendToolCompat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -24,8 +23,11 @@ public class ToolController {
 
     private static final Logger log = LoggerFactory.getLogger(ToolController.class);
 
-    @Autowired
-    private ConfigManager configManager;
+    private final ConfigManager configManager;
+
+    public ToolController(ConfigManager configManager) {
+        this.configManager = configManager;
+    }
 
     /**
      * 列出所有工具及其启用状态.

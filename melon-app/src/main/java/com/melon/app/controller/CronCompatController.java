@@ -9,6 +9,9 @@ import reactor.core.publisher.Mono;
 import java.nio.file.Path;
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.booleanValue;
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * QwenPaw frontend-compatible cron API aliases.
  */
@@ -156,7 +159,7 @@ public class CronCompatController {
     }
 
     private Map<String, Object> stateFor(Map<String, Object> job) {
-        boolean enabled = booleanValue(job.getOrDefault("enabled", true));
+        boolean enabled = booleanValue(job.getOrDefault("enabled", true), true);
         return Map.of(
                 "job_id", String.valueOf(job.get("id")),
                 "enabled", enabled,
@@ -181,17 +184,6 @@ public class CronCompatController {
 
     private Map<String, Object> findJob(String agentId, String id) {
         return CronJobStore.find(workspaceDir(agentId), id);
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
-    }
-
-    private boolean booleanValue(Object value) {
-        if (value instanceof Boolean b) return b;
-        return value == null || Boolean.parseBoolean(String.valueOf(value));
     }
 
 }

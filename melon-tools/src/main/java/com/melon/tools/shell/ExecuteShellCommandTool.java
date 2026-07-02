@@ -3,16 +3,13 @@ package com.melon.tools.shell;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
 import io.agentscope.core.message.ToolResultBlock;
-import io.agentscope.core.message.ToolResultState;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.core.util.PlatformUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.melon.core.util.WorkspacePathResolver;
 import reactor.core.publisher.Mono;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -24,9 +21,13 @@ import java.util.regex.Pattern;
  */
 public class ExecuteShellCommandTool extends ToolBase {
 
-    private static final Logger log = LoggerFactory.getLogger(ExecuteShellCommandTool.class);
+    private final WorkspacePathResolver pathResolver;
 
     public ExecuteShellCommandTool() {
+        this(null);
+    }
+
+    public ExecuteShellCommandTool(String workspaceDir) {
         super(ToolBase.builder()
                 .name("execute_shell_command")
                 .description("Execute a shell command and return stdout/stderr")
@@ -56,6 +57,7 @@ public class ExecuteShellCommandTool extends ToolBase {
                         }"""))
                 .readOnly(false)
                 .concurrencySafe(false));
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
     }
 
     private static Map<String, Object> parseSchema(String json) {
@@ -69,17 +71,15 @@ public class ExecuteShellCommandTool extends ToolBase {
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
         String command = (String) param.getInput().get("command");
-        double timeout = ((Number) param.getInput().getOrDefault("timeout", 60.0)).doubleValue();
+        if (command == null || command.isBlank()) {
+            return Mono.just(error(param, "Error: command is required"));
+        }
+        double timeout = normalizeTimeout(param.getInput().get("timeout"));
         String cwd = (String) param.getInput().getOrDefault("cwd", param.getInput().get("working_directory"));
 
         // 自杀防护
         if (isDangerousSelfKill(command)) {
-            return Mono.just(ToolResultBlock.builder()
-                    .id(param.getToolUseBlock().getId())
-                    .name("execute_shell_command")
-                    .output(java.util.List.of(io.agentscope.core.message.TextBlock.builder().text("Error: Self-kill command detected and blocked.").build()))
-                    .state(io.agentscope.core.message.ToolResultState.ERROR)
-                    .build());
+            return Mono.just(error(param, "Error: Self-kill command detected and blocked."));
         }
 
         return Mono.fromCallable(() -> executeCommand(command, timeout, cwd))
@@ -88,16 +88,10 @@ public class ExecuteShellCommandTool extends ToolBase {
                         .name("execute_shell_command")
                         .output(java.util.List.of(io.agentscope.core.message.TextBlock.builder().text(result).build()))
                         .build())
-                .onErrorResume(e -> Mono.just(ToolResultBlock.builder()
-                        .id(param.getToolUseBlock().getId())
-                        .name("execute_shell_command")
-                        .output(java.util.List.of(io.agentscope.core.message.TextBlock.builder().text("Error: " + e.getMessage()).build()))
-                        .state(io.agentscope.core.message.ToolResultState.ERROR)
-                        .build()));
+                .onErrorResume(e -> Mono.just(error(param, "Error: " + e.getMessage())));
     }
 
     private String executeCommand(String command, double timeout, String cwd) throws Exception {
-        String shell = PlatformUtil.getDefaultShell();
         boolean isWindows = PlatformUtil.isWindows();
 
         ProcessBuilder pb;
@@ -108,27 +102,54 @@ public class ExecuteShellCommandTool extends ToolBase {
         }
 
         if (cwd != null) {
-            pb.directory(Path.of(cwd).toFile());
+            pb.directory(pathResolver.resolve(cwd).toFile());
+        } else {
+            pb.directory(pathResolver.resolveOptional(null).toFile());
         }
         pb.redirectErrorStream(true);
 
         Process process = pb.start();
 
         StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
+        Thread outputReader = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            } catch (Exception ignored) {
+                // The process may be destroyed on timeout while the stream is closing.
             }
-        }
+        }, "melon-shell-output-reader");
+        outputReader.setDaemon(true);
+        outputReader.start();
 
         boolean finished = process.waitFor((long) (timeout * 1000), TimeUnit.MILLISECONDS);
         if (!finished) {
             process.destroyForcibly();
+            process.waitFor(2, TimeUnit.SECONDS);
             output.append("\n[Command timed out after ").append(timeout).append("s]");
         }
+        outputReader.join(1000);
 
         return output.toString();
+    }
+
+    private double normalizeTimeout(Object raw) {
+        double value = raw instanceof Number number ? number.doubleValue() : 60.0;
+        if (Double.isNaN(value) || value <= 0) {
+            return 60.0;
+        }
+        return Math.min(value, 600.0);
+    }
+
+    private ToolResultBlock error(ToolCallParam param, String message) {
+        return ToolResultBlock.builder()
+                .id(param.getToolUseBlock().getId())
+                .name("execute_shell_command")
+                .output(java.util.List.of(io.agentscope.core.message.TextBlock.builder().text(message).build()))
+                .state(io.agentscope.core.message.ToolResultState.ERROR)
+                .build();
     }
 
     private boolean isDangerousSelfKill(String command) {

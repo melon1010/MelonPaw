@@ -128,7 +128,7 @@ Vite 默认运行在 `http://localhost:5173`，并将 `/api` 代理到 `http://l
 
 ## 🛠️ 配置说明
 
-主配置文件：`melon-app/src/main/resources/application.yaml`
+启动配置文件：`melon-app/src/main/resources/application.yaml`
 
 ```yaml
 server:
@@ -136,19 +136,11 @@ server:
   host: 127.0.0.1
 
 melon:
-  home_dir: ~/.melonAI              # 工作根目录（agents / sessions / state）
-  agents:
-    default:
-      active_model: deepseek:deepseek-v4-flash   # provider:model 格式
-      system_prompt_files: [AGENTS.md, SOUL.md, PROFILE.md]
-      running:
-        max_iters: 50
-        shell_command_timeout: 60.0
-      approval:
-        level: AUTO                  # AUTO / SMART
-      plan_mode:
-        enabled: true
+  home_dir: ~/.melonAI              # 用户数据根目录
 ```
+
+Agent、模型、工具、技能等运行时配置保存在 `~/.melonAI/config.yaml` 和前端配置接口写入的状态文件中；
+`application.yaml` 只保留 Spring 启动和全局 home 配置。
 
 ### Agent 模板
 

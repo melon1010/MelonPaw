@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * Workspace-scoped chat registry. Matches Python QwenPaw's workspace/chats.json.
  */
@@ -124,10 +126,17 @@ public class ChatManager {
 
     public void saveSessionShadowFromStateStore(String agentId, String channel, String userId, String sessionId,
                                                 List<Map<String, Object>> prependContext) {
+        saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, prependContext, null);
+    }
+
+    public void saveSessionShadowFromStateStore(String agentId, String channel, String userId, String sessionId,
+                                                List<Map<String, Object>> prependContext,
+                                                Map<String, Object> turnUsage) {
         Path stateFile = findStateFile(agentId, sessionId);
         Map<String, Object> state = stateFile != null ? JsonUtils.load(stateFile, MAP_TYPE) : null;
         if (state == null) state = new LinkedHashMap<>();
         mergeFrontendContext(state, prependContext);
+        injectTurnUsage(state, turnUsage);
         if (!state.isEmpty()) {
             saveSessionShadow(agentId, channel, userId, sessionId, state);
         }
@@ -480,6 +489,25 @@ public class ChatManager {
         state.put("context", context);
     }
 
+    @SuppressWarnings("unchecked")
+    private void injectTurnUsage(Map<String, Object> state, Map<String, Object> turnUsage) {
+        if (turnUsage == null || turnUsage.isEmpty()) return;
+        Object raw = state.get("context");
+        if (!(raw instanceof List<?> context)) return;
+        for (int i = context.size() - 1; i >= 0; i--) {
+            Object item = context.get(i);
+            if (!(item instanceof Map<?, ?> rawMessage)) continue;
+            Map<String, Object> message = (Map<String, Object>) rawMessage;
+            if (!"assistant".equalsIgnoreCase(stringValue(message.get("role")))) continue;
+            Map<String, Object> metadata = message.get("metadata") instanceof Map<?, ?> rawMetadata
+                    ? new LinkedHashMap<>((Map<String, Object>) rawMetadata)
+                    : new LinkedHashMap<>();
+            metadata.put("qwenpaw_turn_usage", turnUsage);
+            message.put("metadata", metadata);
+            return;
+        }
+    }
+
     private int insertionIndexForUser(List<Object> context) {
         int firstAssistant = -1;
         for (int i = 0; i < context.size(); i++) {
@@ -547,14 +575,7 @@ public class ChatManager {
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private static String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
-    }
-
     static String sanitizeFileName(String name) {
-        if (name == null || name.isBlank()) return "default";
-        String cleaned = name.replace("..", "").replace("/", "").replace("\\", "").replace("\0", "");
-        cleaned = cleaned.replaceAll("[^a-zA-Z0-9_\\-.]", "_");
-        return cleaned.isBlank() ? "default" : cleaned;
+        return SafeJSONSession.sanitizeFileName(name);
     }
 }

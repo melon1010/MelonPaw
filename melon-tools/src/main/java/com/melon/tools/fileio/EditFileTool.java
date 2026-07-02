@@ -2,6 +2,7 @@ package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import com.melon.core.util.WorkspacePathResolver;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +13,16 @@ import java.nio.file.Path;
  */
 public class EditFileTool {
 
+    private final WorkspacePathResolver pathResolver;
+
+    public EditFileTool() {
+        this.pathResolver = new WorkspacePathResolver(null);
+    }
+
+    public EditFileTool(String workspaceDir) {
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
+    }
+
     @Tool(name = "edit_file", description = "Edit a file by finding and replacing text. Replaces all occurrences.")
     public String editFile(
             @ToolParam(name = "file_path", description = "Path to the file to edit") String filePath,
@@ -19,7 +30,7 @@ public class EditFileTool {
             @ToolParam(name = "new_text", description = "Text to replace with") String newText
     ) {
         try {
-            Path path = Path.of(filePath);
+            Path path = pathResolver.resolve(filePath);
             String content = Files.readString(path);
             if (!content.contains(oldText)) {
                 return "Error: old_text not found in file";

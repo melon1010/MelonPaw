@@ -11,6 +11,7 @@ import io.agentscope.core.model.OpenAIChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -25,6 +26,8 @@ public class ProviderManager {
     /** Registered providers: providerId -> list of supported model names */
     private final Map<String, List<String>> providers = new LinkedHashMap<>();
     private Path providerConfigFile;
+    private Map<String, Object> providerConfigCache = Map.of();
+    private long providerConfigCacheMtime = Long.MIN_VALUE;
 
     /** Environment variable names for API keys by provider */
     private static final Map<String, String> API_KEY_ENV_VARS = Map.ofEntries(
@@ -43,7 +46,7 @@ public class ProviderManager {
         Map.entry("anthropic", List.of("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229")),
         Map.entry("gemini", List.of("gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash")),
         Map.entry("ollama", List.of("llama3.1", "qwen2.5", "deepseek-r1", "mistral", "phi-3")),
-        Map.entry("deepseek", List.of("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"))
+        Map.entry("deepseek", List.of("deepseek-chat", "deepseek-reasoner"))
     );
 
     public void init(MelonConfig config) {
@@ -219,16 +222,37 @@ public class ProviderManager {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> providerConfig(String providerId) {
-        if (providerConfigFile == null) {
-            return Map.of();
-        }
-        Object raw = JsonUtils.loadAsMap(providerConfigFile).get(providerId);
+        Object raw = providerConfigs().get(providerId);
         if (raw instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();
             map.forEach((key, value) -> result.put(String.valueOf(key), value));
             return result;
         }
         return Map.of();
+    }
+
+    public synchronized void refreshProviderConfig() {
+        providerConfigCache = Map.of();
+        providerConfigCacheMtime = Long.MIN_VALUE;
+    }
+
+    private synchronized Map<String, Object> providerConfigs() {
+        if (providerConfigFile == null) {
+            return Map.of();
+        }
+        try {
+            long mtime = Files.exists(providerConfigFile)
+                    ? Files.getLastModifiedTime(providerConfigFile).toMillis()
+                    : -1L;
+            if (mtime != providerConfigCacheMtime) {
+                providerConfigCache = new LinkedHashMap<>(JsonUtils.loadAsMap(providerConfigFile));
+                providerConfigCacheMtime = mtime;
+            }
+            return providerConfigCache;
+        } catch (Exception e) {
+            log.warn("Failed to load provider config from {}", providerConfigFile, e);
+            return providerConfigCache;
+        }
     }
 
     private Path resolveHomeDir(MelonConfig config) {

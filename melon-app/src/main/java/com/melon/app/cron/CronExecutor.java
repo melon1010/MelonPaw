@@ -5,7 +5,6 @@ import io.agentscope.core.message.UserMessage;
 import com.melon.app.runner.AgentRunner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -22,8 +21,11 @@ public class CronExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(CronExecutor.class);
 
-    @Autowired
-    private AgentRunner agentRunner;
+    private final AgentRunner agentRunner;
+
+    public CronExecutor(AgentRunner agentRunner) {
+        this.agentRunner = agentRunner;
+    }
 
     /**
      * 执行定时任务: 将消息注入到指定 Agent.

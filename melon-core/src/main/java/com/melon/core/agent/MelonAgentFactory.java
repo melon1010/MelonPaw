@@ -35,13 +35,20 @@ public class MelonAgentFactory {
 
     private static final Logger log = LoggerFactory.getLogger(MelonAgentFactory.class);
     private final MultiAgentManager agentManager;
+    private final TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback;
 
     public MelonAgentFactory() {
-        this(null);
+        this(null, null);
     }
 
     public MelonAgentFactory(MultiAgentManager agentManager) {
+        this(agentManager, null);
+    }
+
+    public MelonAgentFactory(MultiAgentManager agentManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback) {
         this.agentManager = agentManager;
+        this.tokenUsageCallback = tokenUsageCallback;
     }
 
     /**
@@ -49,11 +56,15 @@ public class MelonAgentFactory {
      */
     public HarnessAgent create(String agentId, AgentConfig agentConfig, Path workspaceDir,
                                 AgentStateStore stateStore) {
+        String activeModel = agentConfig.getActiveModel();
+        if (activeModel == null || activeModel.isBlank()) {
+            throw new IllegalStateException("Model not configured");
+        }
         log.info("Building HarnessAgent: name={}, model={}, workspace={}",
-                agentConfig.getName(), agentConfig.getActiveModel(), workspaceDir);
+                agentConfig.getName(), activeModel, workspaceDir);
 
         // 1. 构建中间件链 (对应 Python Mixin + hooks)
-        List<MiddlewareBase> middlewares = buildMiddlewares(agentConfig, workspaceDir);
+        List<MiddlewareBase> middlewares = buildMiddlewares(agentId, agentConfig, workspaceDir);
 
         // 2. 构建压缩配置
         CompactionConfig compaction = buildCompactionConfig(agentConfig.getContextCompact());
@@ -68,7 +79,7 @@ public class MelonAgentFactory {
         HarnessAgent.Builder builder = HarnessAgent.builder()
                 .name(agentConfig.getName())
                 .agentId(agentId)
-                .model(agentConfig.getActiveModel())
+                .model(activeModel)
                 .toolkit(toolkit)
                 .workspace(workspaceDir)
                 .filesystem(new LocalFilesystemSpec()
@@ -102,12 +113,12 @@ public class MelonAgentFactory {
 
     private Toolkit buildToolkit(AgentConfig config, Path workspaceDir) {
         Toolkit toolkit = new Toolkit();
-        registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool");
+        registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "read_file", "com.melon.tools.fileio.ReadFileTool", workspaceDir.toString());
-        registerIfEnabled(toolkit, config, "write_file", "com.melon.tools.fileio.WriteFileTool");
-        registerIfEnabled(toolkit, config, "edit_file", "com.melon.tools.fileio.EditFileTool");
-        registerIfEnabled(toolkit, config, "grep_search", "com.melon.tools.fileio.GrepSearchTool");
-        registerIfEnabled(toolkit, config, "glob_search", "com.melon.tools.fileio.GlobSearchTool");
+        registerIfEnabled(toolkit, config, "write_file", "com.melon.tools.fileio.WriteFileTool", workspaceDir.toString());
+        registerIfEnabled(toolkit, config, "edit_file", "com.melon.tools.fileio.EditFileTool", workspaceDir.toString());
+        registerIfEnabled(toolkit, config, "grep_search", "com.melon.tools.fileio.GrepSearchTool", workspaceDir.toString());
+        registerIfEnabled(toolkit, config, "glob_search", "com.melon.tools.fileio.GlobSearchTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "browser_use", "com.melon.tools.browser.BrowserUseTool");
         registerIfEnabled(toolkit, config, "view_image", "com.melon.tools.media.ViewImageTool", workspaceDir);
         registerIfEnabled(toolkit, config, "view_video", "com.melon.tools.media.ViewVideoTool", workspaceDir);
@@ -115,7 +126,7 @@ public class MelonAgentFactory {
         registerIfEnabled(toolkit, config, "get_current_time", "com.melon.tools.util.GetCurrentTimeTool");
         registerIfEnabled(toolkit, config, "set_user_timezone", "com.melon.tools.util.SetUserTimezoneTool");
         registerIfEnabled(toolkit, config, "get_token_usage", "com.melon.tools.util.GetTokenUsageTool");
-        registerIfEnabled(toolkit, config, "send_file_to_user", "com.melon.tools.util.SendFileToUserTool");
+        registerIfEnabled(toolkit, config, "send_file_to_user", "com.melon.tools.util.SendFileToUserTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "create_cron_job", "com.melon.tools.cron.CreateCronJobTool", workspaceDir);
         registerIfEnabled(toolkit, config, "list_agents", "com.melon.tools.agent.ListAgentsTool", agentManager);
         registerIfEnabled(toolkit, config, "chat_with_agent", "com.melon.tools.agent.ChatWithAgentTool");
@@ -174,7 +185,7 @@ public class MelonAgentFactory {
     /**
      * 构建中间件链. 对应 Python 的 Mixin 继承链 + LightContextManager hooks.
      */
-    private List<MiddlewareBase> buildMiddlewares(AgentConfig config, Path workspaceDir) {
+    private List<MiddlewareBase> buildMiddlewares(String agentId, AgentConfig config, Path workspaceDir) {
         List<MiddlewareBase> list = new ArrayList<>();
 
         // 1. 系统提示词中间件 (对应 _build_sys_prompt)
@@ -192,7 +203,14 @@ public class MelonAgentFactory {
         }
 
         // 5. Token 记录中间件 (对应 TokenRecordingModelWrapper)
-        list.add(new TokenRecordingMiddleware());
+        list.add(new TokenRecordingMiddleware((ignoredAgentName, sessionId, modelName, usage, latencyMs) -> {
+            if (tokenUsageCallback != null) {
+                String modelId = config.getActiveModel() != null && !config.getActiveModel().isBlank()
+                        ? config.getActiveModel()
+                        : modelName;
+                tokenUsageCallback.record(agentId, sessionId, modelId, usage, latencyMs);
+            }
+        }));
 
         // 6. 记忆被动注入中间件 (对应 pre_reply hook)
         list.add(new MemoryInjectionMiddleware());
@@ -202,7 +220,7 @@ public class MelonAgentFactory {
 
     private PermissionContextState buildPermissionContext(AgentConfig config) {
         String level = config.getApproval() != null ? config.getApproval().getLevel() : "AUTO";
-        if ("OFF".equalsIgnoreCase(level) || "AUTO".equalsIgnoreCase(level)) {
+        if ("OFF".equalsIgnoreCase(level)) {
             return PermissionContextState.builder().mode(PermissionMode.BYPASS).build();
         }
         PermissionContextState.Builder builder = PermissionContextState.builder().mode(PermissionMode.DEFAULT);

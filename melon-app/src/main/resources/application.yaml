@@ -9,66 +9,7 @@ spring:
     max-in-memory-size: 50MB
 
 melon:
-  server:
-    host: 127.0.0.1
-    port: 8088
   home_dir: ~/.melonAI
-  agents:
-    default:
-      name: default
-      active_model: deepseek:deepseek-v4-flash
-      system_prompt_files:
-        - AGENTS.md
-        - SOUL.md
-        - PROFILE.md
-      running:
-        max_iters: 50
-        llm_retry_enabled: true
-        llm_max_retries: 3
-        llm_backoff_base: 1.0
-        llm_backoff_cap: 60.0
-        llm_max_concurrent: 5
-        task_list_enabled: true
-        shell_command_timeout: 60.0
-      tools:
-        builtin_tools:
-          execute_shell_command: { enabled: true, icon: "\uD83D\uDCBB" }
-          read_file: { enabled: true, icon: "\uD83D\uDCC4" }
-          write_file: { enabled: true, icon: "\u270D\uFE0F" }
-          edit_file: { enabled: true, icon: "\uD83D\uDD89" }
-          grep_search: { enabled: true, icon: "\uD83D\uDD0D" }
-          glob_search: { enabled: true, icon: "\uD83D\uDCC1" }
-          browser_use: { enabled: true, icon: "\uD83C\uDF10" }
-          desktop_screenshot: { enabled: true, icon: "\uD83D\uDCF8" }
-          view_image: { enabled: true, icon: "\uD83D\uDDBC\uFE0F", display_to_user: false }
-          view_video: { enabled: true, icon: "\uD83C\uDF9A\uFE0F", display_to_user: false }
-          send_file_to_user: { enabled: true, icon: "\uD83D\uDCE4" }
-          get_current_time: { enabled: true, icon: "\uD83D\uDD50" }
-          set_user_timezone: { enabled: true, icon: "\uD83C\uDF0D" }
-          get_token_usage: { enabled: true, icon: "\uD83D\uDCCA" }
-          list_agents: { enabled: true, icon: "\uD83E\uDD16" }
-          chat_with_agent: { enabled: true, icon: "\uD83D\uDCAC" }
-          submit_to_agent: { enabled: true, icon: "\uD83D\uDCE8" }
-          check_agent_task: { enabled: true, icon: "\u23F3" }
-          spawn_subagent: { enabled: true, icon: "\uD83D\uDD00" }
-          delegate_external_agent: { enabled: false, icon: "\uD83D\uDCE1" }
-        async_execution_tools:
-          execute_shell_command: true
-          delegate_external_agent: true
-      context_compact:
-        enabled: true
-        compact_threshold_ratio: 0.8
-        reserve_threshold_ratio: 0.1
-        compact_with_thinking_block: true
-        trigger_messages: 50
-        keep_messages: 20
-      coding_mode:
-        enabled: false
-        ast_grep_path: ast-grep
-      plan_mode:
-        enabled: true
-      approval:
-        level: AUTO
 
 logging:
   level:

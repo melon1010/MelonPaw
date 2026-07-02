@@ -2,8 +2,8 @@ package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import com.melon.core.util.WorkspacePathResolver;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -33,6 +33,16 @@ public class GrepSearchTool {
         ".gz", ".7z", ".rar", ".mp3", ".mp4", ".avi", ".mov", ".woff",
         ".woff2", ".ttf", ".eot", ".dat", ".db", ".sqlite", ".pyc"
     );
+
+    private final WorkspacePathResolver pathResolver;
+
+    public GrepSearchTool() {
+        this.pathResolver = new WorkspacePathResolver(null);
+    }
+
+    public GrepSearchTool(String workspaceDir) {
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
+    }
 
     @Tool(name = "grep_search", description = "Search file contents by regex pattern. Returns matching lines with file paths and line numbers.", readOnly = true, concurrencySafe = true)
     public String grepSearch(
@@ -66,12 +76,7 @@ public class GrepSearchTool {
         }
 
         // Determine search path
-        Path searchPath;
-        if (path != null && !path.isBlank()) {
-            searchPath = Path.of(path);
-        } else {
-            searchPath = Path.of(".");
-        }
+        Path searchPath = pathResolver.resolveOptional(path);
 
         if (!Files.exists(searchPath)) {
             return "Error: path does not exist: " + searchPath;

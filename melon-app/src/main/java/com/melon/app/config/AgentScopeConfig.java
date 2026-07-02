@@ -5,6 +5,7 @@ import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.plugin.PluginManager;
 import com.melon.core.provider.ProviderManager;
+import com.melon.app.service.TokenUsageService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -42,8 +43,13 @@ public class AgentScopeConfig {
     }
 
     @Bean
-    public MultiAgentManager multiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager) {
-        MultiAgentManager mgr = new MultiAgentManager(configManager, workspaceManager);
+    public MultiAgentManager multiAgentManager(ConfigManager configManager,
+                                               WorkspaceManager workspaceManager,
+                                               TokenUsageService tokenUsageService) {
+        MultiAgentManager mgr = new MultiAgentManager(configManager, workspaceManager,
+                (agentId, sessionId, modelName, usage, latencyMs) ->
+                        tokenUsageService.recordUsage(sessionId, agentId, modelName,
+                                usage.promptTokens(), usage.completionTokens(), usage.totalTokens()));
         mgr.init();
         return mgr;
     }

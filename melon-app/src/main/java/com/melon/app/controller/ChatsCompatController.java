@@ -9,6 +9,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * QwenPaw console-compatible chat metadata endpoints.
  */
@@ -95,12 +97,6 @@ public class ChatsCompatController {
             }
             return ResponseEntity.ok(Map.of("success", true, "deleted_count", count));
         });
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
     }
 
     private List<Map<String, Object>> messagesFor(String agentId, ChatSpec spec) {

@@ -5,9 +5,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-import java.util.Map;
-
 /**
  * QwenPaw frontend-compatible token usage API aliases.
  */
@@ -22,33 +19,18 @@ public class TokenUsageCompatController {
     }
 
     @GetMapping
-    public Mono<ResponseEntity<?>> summary() {
-        return Mono.fromCallable(() -> {
-            Map<String, Object> total = tokenUsageService.getTotalUsage();
-            long input = numberValue(total.get("input_tokens"));
-            long output = numberValue(total.get("output_tokens"));
-            return ResponseEntity.ok(Map.of(
-                    "total_prompt_tokens", input,
-                    "total_completion_tokens", output,
-                    "total_calls", numberValue(total.get("call_count")),
-                    "by_model", Map.of(),
-                    "by_date", Map.of()
-            ));
-        });
+    public Mono<ResponseEntity<?>> summary(@RequestParam(value = "start_date", required = false) String startDate,
+                                           @RequestParam(value = "end_date", required = false) String endDate,
+                                           @RequestParam(value = "provider", required = false) String provider,
+                                           @RequestParam(value = "model", required = false) String model) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(tokenUsageService.getSummary(startDate, endDate, provider, model)));
     }
 
     @GetMapping("/details")
-    public Mono<ResponseEntity<?>> details() {
-        return Mono.just(ResponseEntity.ok(List.of()));
-    }
-
-    private long numberValue(Object value) {
-        if (value instanceof Number n) return n.longValue();
-        if (value == null) return 0;
-        try {
-            return Long.parseLong(String.valueOf(value));
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
+    public Mono<ResponseEntity<?>> details(@RequestParam(value = "start_date", required = false) String startDate,
+                                           @RequestParam(value = "end_date", required = false) String endDate,
+                                           @RequestParam(value = "provider", required = false) String provider,
+                                           @RequestParam(value = "model", required = false) String model) {
+        return Mono.fromCallable(() -> ResponseEntity.ok(tokenUsageService.getDetails(startDate, endDate, provider, model)));
     }
 }

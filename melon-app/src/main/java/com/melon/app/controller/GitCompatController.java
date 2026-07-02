@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * QwenPaw frontend-compatible git API.
  */
@@ -203,12 +205,6 @@ public class GitCompatController {
         if (value instanceof List<?> list) return list.stream().map(String::valueOf).toList();
         if (value instanceof String text && !text.isBlank()) return List.of(text);
         return List.of();
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
     }
 
     private record GitResult(int exitCode, String stdout, String stderr) {}

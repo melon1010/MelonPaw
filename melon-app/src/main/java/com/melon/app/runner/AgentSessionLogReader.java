@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * Reads AgentScope session logs and returns the message shape the copied
  * QwenPaw frontend already understands.
@@ -477,10 +479,6 @@ public class AgentSessionLogReader {
     private String lower(Object value) {
         String text = stringValue(value);
         return text == null ? "" : text.toLowerCase();
-    }
-
-    private String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
     }
 
     private record ToolCall(String name, String callId, Object arguments) {}

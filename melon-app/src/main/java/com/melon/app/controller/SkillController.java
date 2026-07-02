@@ -15,6 +15,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * 技能管理 API. 对应 Python /api/skills.
  */
@@ -538,9 +540,4 @@ public class SkillController {
         return Map.of();
     }
 
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
-    }
 }

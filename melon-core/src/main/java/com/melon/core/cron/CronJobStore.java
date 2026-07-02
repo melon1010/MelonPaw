@@ -6,6 +6,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.booleanValue;
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * Workspace-local QwenPaw-compatible jobs.json storage.
  */
@@ -80,7 +83,7 @@ public final class CronJobStore {
         String name = stringValue(body.get("name"), "Cron job");
         String cron = cronValue(body);
         String prompt = promptValue(body);
-        boolean enabled = booleanValue(body.getOrDefault("enabled", true));
+        boolean enabled = booleanValue(body.getOrDefault("enabled", true), true);
         job.put("id", stringValue(body.get("id"), id));
         job.put("name", name);
         job.put("cron", cron);
@@ -116,17 +119,6 @@ public final class CronJobStore {
             }
         }
         return null;
-    }
-
-    private static String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
-    }
-
-    private static boolean booleanValue(Object value) {
-        if (value instanceof Boolean b) return b;
-        return value == null || Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static String cronValue(Map<String, Object> body) {

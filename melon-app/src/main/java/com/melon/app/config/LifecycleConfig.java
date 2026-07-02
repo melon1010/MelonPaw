@@ -2,22 +2,21 @@ package com.melon.app.config;
 
 import com.melon.app.cron.CronManager;
 import com.melon.app.service.BuiltinSkillInitializer;
+import com.melon.app.service.TokenUsageService;
 import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.agent.WorkspaceManager;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.plugin.PluginManager;
 import com.melon.core.provider.ProviderManager;
 import com.melon.tools.agent.ListAgentsTool;
+import com.melon.tools.util.GetTokenUsageTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Configuration;
 
 import jakarta.annotation.PreDestroy;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 启动/关闭生命周期. 对应 Python app/_app.py 的 lifespan 函数.
@@ -27,30 +26,33 @@ import java.util.concurrent.TimeUnit;
 public class LifecycleConfig implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(LifecycleConfig.class);
-    private static final long SHUTDOWN_AWAIT_SECONDS = 10;
 
-    @Autowired
-    private ConfigManager configManager;
+    private final ConfigManager configManager;
+    private final ProviderManager providerManager;
+    private final MultiAgentManager multiAgentManager;
+    private final WorkspaceManager workspaceManager;
+    private final BuiltinSkillInitializer builtinSkillInitializer;
+    private final TokenUsageService tokenUsageService;
+    private final PluginManager pluginManager;
+    private final CronManager cronManager;
 
-    @Autowired
-    private ProviderManager providerManager;
-
-    @Autowired
-    private MultiAgentManager multiAgentManager;
-
-    @Autowired
-    private WorkspaceManager workspaceManager;
-
-    @Autowired
-    private BuiltinSkillInitializer builtinSkillInitializer;
-
-    @Autowired(required = false)
-    private PluginManager pluginManager;
-
-    @Autowired(required = false)
-    private CronManager cronManager;
-
-    private final CountDownLatch initLatch = new CountDownLatch(1);
+    public LifecycleConfig(ConfigManager configManager,
+                           ProviderManager providerManager,
+                           MultiAgentManager multiAgentManager,
+                           WorkspaceManager workspaceManager,
+                           BuiltinSkillInitializer builtinSkillInitializer,
+                           TokenUsageService tokenUsageService,
+                           PluginManager pluginManager,
+                           CronManager cronManager) {
+        this.configManager = configManager;
+        this.providerManager = providerManager;
+        this.multiAgentManager = multiAgentManager;
+        this.workspaceManager = workspaceManager;
+        this.builtinSkillInitializer = builtinSkillInitializer;
+        this.tokenUsageService = tokenUsageService;
+        this.pluginManager = pluginManager;
+        this.cronManager = cronManager;
+    }
 
     @Override
     public void run(ApplicationArguments args) {
@@ -63,10 +65,13 @@ public class LifecycleConfig implements ApplicationRunner {
         providerManager.init(configManager.getConfig());
         multiAgentManager.init();
         ListAgentsTool.setAgentListSupplier(multiAgentManager::listAgents);
+        GetTokenUsageTool.setTokenUsageProvider((days, modelName, providerId) -> {
+            String start = java.time.LocalDate.now().minusDays(days != null ? days : 30L).toString();
+            String end = java.time.LocalDate.now().toString();
+            return tokenUsageService.getSummary(start, end, providerId, modelName);
+        });
         log.info("Phase 1 complete: config, providers, state store, builtin skills, workspaces initialized");
 
-        // Agents are created lazily on first chat. Startup should not require model API keys.
-        initLatch.countDown();
         log.info("Phase 2 skipped: agents will start lazily on demand");
 
         log.info("=== Melon ready on {}:{} ===",
@@ -85,17 +90,6 @@ public class LifecycleConfig implements ApplicationRunner {
     @PreDestroy
     public void shutdown() {
         log.info("=== Melon shutting down ===");
-
-        // 等待进行中的任务完成 (最多 10 秒)
-        try {
-            if (!initLatch.await(SHUTDOWN_AWAIT_SECONDS, TimeUnit.SECONDS)) {
-                log.warn("Timeout waiting {}s for in-progress tasks to complete, proceeding with shutdown",
-                        SHUTDOWN_AWAIT_SECONDS);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Interrupted while waiting for in-progress tasks");
-        }
 
         // 停止所有 Agent
         try {

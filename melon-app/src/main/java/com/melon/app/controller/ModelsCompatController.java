@@ -11,6 +11,8 @@ import reactor.core.publisher.Mono;
 import java.nio.file.Path;
 import java.util.*;
 
+import static com.melon.core.util.ValueUtils.stringValue;
+
 /**
  * QwenPaw console-compatible model endpoints.
  */
@@ -49,7 +51,12 @@ public class ModelsCompatController {
     public Mono<ResponseEntity<?>> updateProviderConfig(@PathVariable String providerId, @RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> config = providerConfig(providerId);
         if (body != null) {
-            config.putAll(body);
+            for (Map.Entry<String, Object> entry : body.entrySet()) {
+                if ("api_key".equals(entry.getKey()) && isMaskedKey(stringValue(entry.getValue()))) {
+                    continue;
+                }
+                config.put(entry.getKey(), entry.getValue());
+            }
         }
         saveProviderConfig(providerId, config);
         Map<String, Object> result = new LinkedHashMap<>(providerPayload(providerId, providerManager.listModels(providerId)));
@@ -136,12 +143,8 @@ public class ModelsCompatController {
             @RequestBody Map<String, Object> body) {
         return Mono.fromCallable(() -> {
             String targetAgentId = stringValue(body.getOrDefault("agent_id", agentId));
-            Object providerId = body.get("provider_id");
-            Object model = body.getOrDefault("active_model", body.getOrDefault("default", body.get("model")));
-            if (model != null && configManager.getConfig().getAgents().containsKey(targetAgentId)) {
-                String active = providerId != null && !String.valueOf(providerId).isBlank()
-                        ? providerId + ":" + model
-                        : String.valueOf(model);
+            String active = activeModelFromBody(body);
+            if (!active.isBlank() && configManager.getConfig().getAgents().containsKey(targetAgentId)) {
                 configManager.getConfig().getAgents().get(targetAgentId).setActiveModel(active);
                 configManager.save();
                 multiAgentManager.reload(targetAgentId);
@@ -230,18 +233,18 @@ public class ModelsCompatController {
     }
 
     private Map<String, Object> activeModels(String agentId) {
-        String active = "deepseek:deepseek-v4-flash";
+        String active = "";
         if (configManager.getConfig().getAgents().containsKey(agentId)) {
             active = configManager.getConfig().getAgents().get(agentId).getActiveModel();
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("active_model", active);
+        result.put("active_model", active != null ? active : "");
         String[] parts = splitModel(active);
         result.put("active_llm", Map.of("provider_id", parts[0], "model", parts[1]));
-        result.put("default", active);
-        result.put("summary", active);
-        result.put("coding", active);
-        result.put("memory", active);
+        result.put("default", active != null ? active : "");
+        result.put("summary", active != null ? active : "");
+        result.put("coding", active != null ? active : "");
+        result.put("memory", active != null ? active : "");
         return result;
     }
 
@@ -276,6 +279,7 @@ public class ModelsCompatController {
         Map<String, Object> configs = providerConfigs();
         configs.put(providerId, config);
         JsonUtils.save(providerConfigFile(), configs);
+        providerManager.refreshProviderConfig();
     }
 
     private Map<String, Object> providerConfigs() {
@@ -293,12 +297,28 @@ public class ModelsCompatController {
         return hasText(stringValue(config.get("api_key"))) || providerManager.isConfigured(providerId);
     }
 
-    private String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
-    }
-
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String activeModelFromBody(Map<String, Object> body) {
+        Object active = body.getOrDefault("active_model", body.getOrDefault("default", null));
+        if (active != null && hasText(String.valueOf(active))) {
+            return String.valueOf(active);
+        }
+        String model = stringValue(body.get("model"));
+        if (!hasText(model)) {
+            return "";
+        }
+        String providerId = stringValue(body.get("provider_id"));
+        if (!hasText(providerId) || model.contains(":")) {
+            return model;
+        }
+        return providerId + ":" + model;
+    }
+
+    private boolean isMaskedKey(String apiKey) {
+        return apiKey != null && apiKey.contains("*");
     }
 
     private String maskKey(String apiKey) {

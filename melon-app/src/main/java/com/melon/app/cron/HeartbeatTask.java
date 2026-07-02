@@ -5,7 +5,6 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -30,11 +29,13 @@ public class HeartbeatTask implements Runnable {
     private static final String HEARTBEAT_FILE = "HEARTBEAT.md";
     private static final String TRIGGER_MARKER = "<!-- trigger:active -->";
 
-    @Autowired
-    private CronExecutor cronExecutor;
+    private final CronExecutor cronExecutor;
+    private final ConfigManager configManager;
 
-    @Autowired
-    private ConfigManager configManager;
+    public HeartbeatTask(CronExecutor cronExecutor, ConfigManager configManager) {
+        this.cronExecutor = cronExecutor;
+        this.configManager = configManager;
+    }
 
     @Value("${melon.cron.heartbeat_interval_seconds:300}")
     private long intervalSeconds;

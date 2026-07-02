@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.melon.core.util.ValueUtils.stringValue;
 import java.util.UUID;
 
 /**
@@ -89,14 +91,17 @@ public class ConsoleCompatController {
                 .startWith(envelope.start())
                 .doFinally(signal -> {
                     chatManager.setStatus(agentId, chatId, "idle");
-                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, frontendContext);
+                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId,
+                            frontendContext, envelope.turnUsageSnapshot());
                     log.info("Console chat finished: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal);
                 })
                 .onErrorResume(e -> {
                     log.error("Console chat failed: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId, e);
                     chatManager.setStatus(agentId, chatId, "idle");
-                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, frontendContext);
-                    return Flux.fromIterable(envelope.error(e));
+                    List<ServerSentEvent<String>> errorEvents = envelope.error(e);
+                    chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId,
+                            frontendContext, envelope.turnUsageSnapshot());
+                    return Flux.fromIterable(errorEvents);
                 });
     }
 
@@ -174,12 +179,6 @@ public class ConsoleCompatController {
                         "stored_name", stored,
                         "size", path.toFile().length()
                 )));
-    }
-
-    private String stringValue(Object value, String fallback) {
-        if (value == null) return fallback;
-        String text = String.valueOf(value);
-        return text.isBlank() ? fallback : text;
     }
 
     private String titleFromText(String text) {

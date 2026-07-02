@@ -2,8 +2,8 @@ package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
-import com.melon.core.util.SafePathUtil;
 import com.melon.core.util.TextTruncateUtil;
+import com.melon.core.util.WorkspacePathResolver;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,18 +13,14 @@ import java.nio.file.Path;
  */
 public class ReadFileTool {
 
-    private String workspaceDir;
+    private final WorkspacePathResolver pathResolver;
 
     public ReadFileTool() {
-        this.workspaceDir = null;
+        this.pathResolver = new WorkspacePathResolver(null);
     }
 
     public ReadFileTool(String workspaceDir) {
-        this.workspaceDir = workspaceDir;
-    }
-
-    public void setWorkspaceDir(String workspaceDir) {
-        this.workspaceDir = workspaceDir;
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
     }
 
     @Tool(name = "read_file", description = "Read the contents of a file. Supports line range selection.", readOnly = true)
@@ -34,20 +30,13 @@ public class ReadFileTool {
             @ToolParam(name = "end_line", description = "Ending line number (1-based, optional)") Integer endLine
     ) {
         try {
-            // Resolve path from workspace context
-            Path path;
-            if (workspaceDir != null && !Path.of(filePath).isAbsolute()) {
-                path = Path.of(workspaceDir, filePath);
-            } else {
-                path = Path.of(filePath);
-            }
-
+            Path path = pathResolver.resolve(filePath);
             String content = Files.readString(path);
 
             if (startLine != null || endLine != null) {
                 String[] lines = content.split("\n");
-                int start = startLine != null ? startLine - 1 : 0;
-                int end = endLine != null ? endLine : lines.length;
+                int start = Math.max(0, startLine != null ? startLine - 1 : 0);
+                int end = Math.min(lines.length, Math.max(start, endLine != null ? endLine : lines.length));
                 StringBuilder sb = new StringBuilder();
                 for (int i = start; i < end && i < lines.length; i++) {
                     sb.append(i + 1).append("\t").append(lines[i]).append("\n");

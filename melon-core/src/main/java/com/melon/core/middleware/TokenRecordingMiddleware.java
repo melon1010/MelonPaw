@@ -47,8 +47,9 @@ public class TokenRecordingMiddleware implements MiddlewareBase {
                         usage.totalTokens(), latency);
 
                 if (callback != null && usage.totalTokens() > 0) {
-                    String sessionId = ctx.get("session_id", String.class);
-                    callback.record(agent.getName(), sessionId, usage, latency);
+                    String sessionId = ctx.getSessionId();
+                    String modelName = input.model() != null ? input.model().getModelName() : "";
+                    callback.record(agent.getName(), sessionId, modelName, usage, latency);
                 }
             }
         });
@@ -103,6 +104,6 @@ public class TokenRecordingMiddleware implements MiddlewareBase {
 
     @FunctionalInterface
     public interface TokenUsageCallback {
-        void record(String agentId, String sessionId, TokenUsage usage, long latencyMs);
+        void record(String agentId, String sessionId, String modelName, TokenUsage usage, long latencyMs);
     }
 }

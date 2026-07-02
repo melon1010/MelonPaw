@@ -2,8 +2,8 @@ package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import com.melon.core.util.WorkspacePathResolver;
 
-import java.io.File;
 import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -21,6 +21,15 @@ import java.util.Set;
 public class GlobSearchTool {
 
     private static final Set<String> SKIP_DIRS = Set.of(".git", "node_modules", "__pycache__", ".venv", "target", "build");
+    private final WorkspacePathResolver pathResolver;
+
+    public GlobSearchTool() {
+        this.pathResolver = new WorkspacePathResolver(null);
+    }
+
+    public GlobSearchTool(String workspaceDir) {
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
+    }
 
     @Tool(name = "glob_search", description = "Find files matching a glob pattern. Returns file paths.", readOnly = true, concurrencySafe = true)
     public String globSearch(
@@ -28,14 +37,15 @@ public class GlobSearchTool {
             @ToolParam(name = "path", description = "Directory to search in (optional)") String path
     ) {
         try {
-            Path searchPath = path != null ? Path.of(path) : Path.of(".");
+            Path searchPath = pathResolver.resolveOptional(path);
             PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
             List<String> results = new ArrayList<>();
 
             Files.walkFileTree(searchPath, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (matcher.matches(file)) {
+                    Path relative = searchPath.relativize(file);
+                    if (matcher.matches(relative) || matcher.matches(file)) {
                         results.add(file.toString());
                     }
                     return results.size() < 200 ? FileVisitResult.CONTINUE : FileVisitResult.TERMINATE;

@@ -5,6 +5,7 @@ import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.middleware.TokenRecordingMiddleware;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,8 +29,13 @@ public class MultiAgentManager {
     private AgentStateStore stateStore;
 
     public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager) {
+        this(configManager, workspaceManager, null);
+    }
+
+    public MultiAgentManager(ConfigManager configManager, WorkspaceManager workspaceManager,
+                             TokenRecordingMiddleware.TokenUsageCallback tokenUsageCallback) {
         this.configManager = configManager;
-        this.agentFactory = new MelonAgentFactory(this);
+        this.agentFactory = new MelonAgentFactory(this, tokenUsageCallback);
         this.workspaceManager = workspaceManager;
     }
 

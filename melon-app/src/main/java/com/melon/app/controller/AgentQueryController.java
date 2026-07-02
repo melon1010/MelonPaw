@@ -5,7 +5,6 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.SseEventMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
@@ -22,11 +21,13 @@ import java.util.Map;
 @RequestMapping("/api/agent")
 public class AgentQueryController {
 
-    @Autowired
-    private AgentRunner agentRunner;
+    private final AgentRunner agentRunner;
+    private final SseEventMapper sseMapper;
 
-    @Autowired
-    private SseEventMapper sseMapper;
+    public AgentQueryController(AgentRunner agentRunner, SseEventMapper sseMapper) {
+        this.agentRunner = agentRunner;
+        this.sseMapper = sseMapper;
+    }
 
     /**
      * 非流式查询.

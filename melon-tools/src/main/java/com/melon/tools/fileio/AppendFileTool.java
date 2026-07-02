@@ -2,6 +2,7 @@ package com.melon.tools.fileio;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import com.melon.core.util.WorkspacePathResolver;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,6 +15,16 @@ import java.nio.file.StandardOpenOption;
  */
 public class AppendFileTool {
 
+    private final WorkspacePathResolver pathResolver;
+
+    public AppendFileTool() {
+        this.pathResolver = new WorkspacePathResolver(null);
+    }
+
+    public AppendFileTool(String workspaceDir) {
+        this.pathResolver = new WorkspacePathResolver(workspaceDir);
+    }
+
     @Tool(name = "append_file",
           description = "Append content to the end of a file. Creates the file if it does not exist.")
     public String appendFile(
@@ -21,7 +32,7 @@ public class AppendFileTool {
             @ToolParam(name = "content", description = "Content to append to the file") String content
     ) {
         try {
-            Path path = Path.of(filePath);
+            Path path = pathResolver.resolve(filePath);
             // 确保父目录存在
             if (path.getParent() != null) {
                 Files.createDirectories(path.getParent());

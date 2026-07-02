@@ -2,7 +2,6 @@ package com.melon.app.controller;
 
 import com.melon.core.config.ConfigManager;
 import com.melon.core.config.MelonConfig;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -13,8 +12,11 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/api/config")
 public class ConfigController {
 
-    @Autowired
-    private ConfigManager configManager;
+    private final ConfigManager configManager;
+
+    public ConfigController(ConfigManager configManager) {
+        this.configManager = configManager;
+    }
 
     @GetMapping
     public Mono<MelonConfig> get() {
