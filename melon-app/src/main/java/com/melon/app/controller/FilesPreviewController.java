@@ -37,7 +37,7 @@ public class FilesPreviewController {
             Path workspace = configManager.resolveWorkspaceDir(AgentRequestSupport.agentId(agentId)).toAbsolutePath().normalize();
             Path file = resolvePreviewPath(workspace, filePath);
             fileGuardService.assertAllowed(file);
-            if (!fileGuardService.allowPreviewOutsideWorkspace() && !file.startsWith(workspace)) {
+            if (!fileGuardService.allowPreviewOutsideWorkspace() && !isInsideKnownWorkspace(file, workspace)) {
                 return ResponseEntity.status(403).body(Map.of("detail", "OUTSIDE_WORKSPACE"));
             }
             if (!Files.isRegularFile(file)) {
@@ -48,6 +48,12 @@ public class FilesPreviewController {
                     .contentType(contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType))
                     .body(new ByteArrayResource(Files.readAllBytes(file)));
         });
+    }
+
+    private boolean isInsideKnownWorkspace(Path file, Path currentWorkspace) {
+        if (file.startsWith(currentWorkspace)) return true;
+        Path workspaceRoot = configManager.resolveWorkspaceRootDir().toAbsolutePath().normalize();
+        return file.startsWith(workspaceRoot) && !file.equals(workspaceRoot);
     }
 
     private Path resolvePreviewPath(Path workspace, String filePath) {

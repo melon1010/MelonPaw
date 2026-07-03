@@ -174,5 +174,39 @@ public final class AgentSessionLogReaderSelfCheck {
                 || !Long.valueOf(20).equals(truncated.get("timeout"))) {
             throw new AssertionError("truncated shell args were not recovered: " + truncated);
         }
+
+        Path compactedStateDir = home.resolve("state/__anon__/s2");
+        Files.createDirectories(compactedStateDir);
+        Files.writeString(compactedStateDir.resolve("agent_state.json"), """
+                {
+                  "session_id": "s2",
+                  "context": [
+                    {
+                      "id": "summary",
+                      "role": "USER",
+                      "name": "__compaction_summary__",
+                      "content": "You are in the middle of a conversation that has been summarized.",
+                      "metadata": {}
+                    },
+                    {
+                      "id": "a1",
+                      "role": "ASSISTANT",
+                      "name": "test",
+                      "content": [{"type":"text","text":"after compaction"}],
+                      "metadata": {}
+                    }
+                  ]
+                }
+                """);
+        Files.writeString(sessionDir.resolve("s2.log.jsonl"), """
+                {"type":"message","id":"summary-log","timestamp":0.5,"role":"USER","content":"You are in the middle of a conversation that has been summarized.\\n\\n<summary>hidden</summary>"}
+                {"type":"message","id":"real-user","timestamp":1.0,"role":"USER","content":"real question"}
+                {"type":"message","id":"real-assistant","timestamp":2.0,"role":"ASSISTANT","content":"real answer"}
+                """);
+        messages = reader.readFrontendMessages("test", "s2");
+        String firstText = String.valueOf(((Map<?, ?>) ((List<?>) messages.get(0).get("content")).get(0)).get("text"));
+        if (!"real question".equals(firstText) || messages.toString().contains("__compaction_summary__")) {
+            throw new AssertionError("compaction summary leaked instead of jsonl fallback: " + messages);
+        }
     }
 }

@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -29,6 +30,8 @@ public class ChatManager {
     private static final Logger log = LoggerFactory.getLogger(ChatManager.class);
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final int LARGE_TOOL_OUTPUT_CHARS = 12000;
+    private static final String COMPACTION_SUMMARY_PREFIX =
+            "You are in the middle of a conversation that has been summarized.";
 
     private final ConfigManager configManager;
 
@@ -137,6 +140,7 @@ public class ChatManager {
         if (state == null) state = new LinkedHashMap<>();
         mergeFrontendContext(state, prependContext);
         injectTurnUsage(state, turnUsage);
+        state = repairCompactedStateFromLog(agentId, sessionId, state, prependContext, turnUsage);
         if (!state.isEmpty()) {
             saveSessionShadow(agentId, channel, userId, sessionId, state);
         }
@@ -283,6 +287,165 @@ public class ChatManager {
             if (Files.isRegularFile(candidate)) return candidate;
         }
         return null;
+    }
+
+    private Map<String, Object> repairCompactedStateFromLog(String agentId, String sessionId,
+                                                            Map<String, Object> state,
+                                                            List<Map<String, Object>> prependContext,
+                                                            Map<String, Object> turnUsage) {
+        if (!hasCompactionSummary(state)) return state;
+        List<Object> logContext = readContextFromSessionLog(agentId, sessionId);
+        if (logContext.isEmpty() || logContext.size() <= contextSize(state)) return state;
+        Map<String, Object> repaired = new LinkedHashMap<>(state);
+        repaired.put("context", logContext);
+        mergeFrontendContext(repaired, prependContext);
+        injectTurnUsage(repaired, turnUsage);
+        log.info("Repaired compacted session shadow from jsonl: agent={}, session={}, messages={}",
+                agentId, sessionId, logContext.size());
+        return repaired;
+    }
+
+    private boolean hasCompactionSummary(Map<String, Object> state) {
+        Object raw = state.get("context");
+        if (!(raw instanceof List<?> context)) return false;
+        return context.stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .anyMatch(message -> "__compaction_summary__".equals(stringValue(message.get("name"))));
+    }
+
+    private int contextSize(Map<String, Object> state) {
+        Object raw = state.get("context");
+        return raw instanceof List<?> context ? context.size() : 0;
+    }
+
+    private List<Object> readContextFromSessionLog(String agentId, String sessionId) {
+        Path logFile = findSessionLog(agentId, sessionId);
+        if (logFile == null) return List.of();
+        List<Object> context = new ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(logFile)) {
+                if (line.isBlank()) continue;
+                Map<String, Object> raw = JsonUtils.getMapper().readValue(line, MAP_TYPE);
+                if (isInternalLogMessage(raw)) continue;
+                Map<String, Object> message = logLineToStateMessage(agentId, raw);
+                if (!message.isEmpty() && isNewMessage(context, message)) context.add(message);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to repair session shadow from log: {}", logFile, e);
+            return List.of();
+        }
+        return context;
+    }
+
+    private Path findSessionLog(String agentId, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return null;
+        Path workspace = configManager.resolveWorkspaceDir(normalizeAgentId(agentId));
+        List<Path> candidates = List.of(
+                workspace.resolve("agents"),
+                workspace.resolve("default").resolve("agents")
+        );
+        for (Path agentsDir : candidates) {
+            Path found = findUnderAgents(agentsDir, sessionId + ".log.jsonl");
+            if (found != null) return found;
+            found = findUnderAgents(agentsDir, sessionId + ".jsonl");
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private Path findUnderAgents(Path agentsDir, String fileName) {
+        if (!Files.isDirectory(agentsDir)) return null;
+        try (var stream = Files.find(agentsDir, 4,
+                (path, attrs) -> attrs.isRegularFile() && path.getFileName().toString().equals(fileName))) {
+            return stream.sorted(Comparator.comparing(Path::toString)).findFirst().orElse(null);
+        } catch (IOException e) {
+            log.debug("Failed to scan session logs under {}", agentsDir, e);
+            return null;
+        }
+    }
+
+    private Map<String, Object> logLineToStateMessage(String agentId, Map<String, Object> raw) {
+        String role = stringValue(raw.get("role")).toLowerCase();
+        if (role.isBlank()) role = "assistant";
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", valueOrDefault(stringValue(raw.get("id")), UUID.randomUUID().toString()));
+        message.put("role", role);
+        message.put("name", "user".equals(role) ? "user" : normalizeAgentId(agentId));
+        message.put("metadata", Map.of());
+        message.put("content", logContentBlocks(role, stringValue(raw.get("content")), stringValue(raw.get("toolCallId"))));
+        return message;
+    }
+
+    private List<Object> logContentBlocks(String role, String content, String toolCallId) {
+        if ("tool".equals(role) && content.startsWith("[tool_result:")) {
+            return List.of(toolResultBlock(content, toolCallId));
+        }
+        if (!"assistant".equals(role) || !content.contains("[tool_call:")) {
+            return List.of(Map.of("type", "text", "text", content));
+        }
+        List<Object> blocks = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        for (String line : content.split("\\R")) {
+            if (line.startsWith("[tool_call:")) {
+                if (!text.isEmpty()) {
+                    blocks.add(Map.of("type", "text", "text", text.toString().trim()));
+                    text.setLength(0);
+                }
+                blocks.add(toolCallBlock(line, toolCallId));
+            } else {
+                if (!text.isEmpty()) text.append('\n');
+                text.append(line);
+            }
+        }
+        if (!text.isEmpty()) blocks.add(Map.of("type", "text", "text", text.toString().trim()));
+        return blocks;
+    }
+
+    private Map<String, Object> toolCallBlock(String line, String fallbackCallId) {
+        int marker = line.indexOf("[tool_call:");
+        int nameStart = marker + "[tool_call:".length();
+        int argsStart = line.indexOf('(', nameStart);
+        int end = line.endsWith("]") ? line.length() - 1 : line.length();
+        String name;
+        String args = "";
+        if (argsStart > nameStart) {
+            name = line.substring(nameStart, argsStart).trim();
+            int argsEnd = line.lastIndexOf(')');
+            if (argsEnd > argsStart) args = line.substring(argsStart + 1, argsEnd).trim();
+        } else {
+            name = line.substring(nameStart, end).trim();
+        }
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("type", "tool_call");
+        block.put("id", valueOrDefault(fallbackCallId, UUID.randomUUID().toString().replace("-", "")));
+        block.put("name", name);
+        block.put("input", args);
+        block.put("state", "finished");
+        return block;
+    }
+
+    private Map<String, Object> toolResultBlock(String content, String fallbackCallId) {
+        int marker = content.indexOf("[tool_result:");
+        int end = content.indexOf(']', marker);
+        String name = end > marker ? content.substring(marker + "[tool_result:".length(), end).trim() : "unknown";
+        String output = end >= 0 ? content.substring(end + 1).trim() : content;
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("type", "tool_result");
+        block.put("id", valueOrDefault(fallbackCallId, UUID.randomUUID().toString().replace("-", "")));
+        block.put("name", name);
+        block.put("output", List.of(Map.of("type", "text", "text", output)));
+        block.put("state", "success");
+        return block;
+    }
+
+    private boolean isNewMessage(List<Object> context, Map<String, Object> message) {
+        String id = stringValue(message.get("id"));
+        if (id.isBlank()) return true;
+        return context.stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .noneMatch(existing -> id.equals(stringValue(existing.get("id"))));
     }
 
     private Map<String, Object> scrollIndex(String agentId, String sessionId, Map<String, Object> state) {
@@ -462,6 +625,11 @@ public class ChatManager {
         String name = stringValue(message.get("name"));
         if ("__compaction_summary__".equals(name)) return true;
         return "__system__".equals(name) || "__internal__".equals(name);
+    }
+
+    private boolean isInternalLogMessage(Map<String, Object> raw) {
+        return stringValue(raw.get("content")).startsWith(COMPACTION_SUMMARY_PREFIX)
+                || "__compaction_summary__".equals(stringValue(raw.get("name")));
     }
 
     @SuppressWarnings("unchecked")

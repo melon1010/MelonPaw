@@ -30,6 +30,8 @@ public class AgentSessionLogReader {
 
     private static final Logger log = LoggerFactory.getLogger(AgentSessionLogReader.class);
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final String COMPACTION_SUMMARY_PREFIX =
+            "You are in the middle of a conversation that has been summarized.";
 
     private final ConfigManager configManager;
     private final ChatManager chatManager;
@@ -46,12 +48,12 @@ public class AgentSessionLogReader {
     public List<Map<String, Object>> readFrontendMessages(String agentId, String userId, String channel, String sessionId) {
         Map<String, Object> shadow = chatManager.loadSessionShadow(agentId, channel, userId, sessionId);
         List<Map<String, Object>> shadowMessages = readPythonSessionMessages(shadow);
-        if (!shadowMessages.isEmpty()) return shadowMessages;
+        if (!shadowMessages.isEmpty() && !looksTruncatedConsoleHistory(shadowMessages)) return shadowMessages;
 
         Path stateFile = findStateFile(agentId, sessionId);
         if (stateFile != null) {
             List<Map<String, Object>> messages = readStateMessages(stateFile);
-            if (!messages.isEmpty()) return messages;
+            if (!messages.isEmpty() && !looksTruncatedConsoleHistory(messages)) return messages;
         }
 
         Path logFile = findSessionLog(agentId, sessionId);
@@ -69,6 +71,13 @@ public class AgentSessionLogReader {
             return List.of();
         }
         return messages;
+    }
+
+    private boolean looksTruncatedConsoleHistory(List<Map<String, Object>> messages) {
+        if (messages.isEmpty()) return false;
+        if (isInternalFrontendMessage(messages.get(0))) return true;
+        String firstRole = lower(messages.get(0).get("role"));
+        return !"user".equals(firstRole);
     }
 
     private List<Map<String, Object>> readPythonSessionMessages(Map<String, Object> raw) {
@@ -131,6 +140,7 @@ public class AgentSessionLogReader {
     }
 
     private List<Map<String, Object>> convertStateMessage(Map<String, Object> raw) {
+        if (isInternalStateMessage(raw)) return List.of();
         String role = lower(raw.get("role"));
         if (role.isBlank()) role = "assistant";
         Object content = raw.get("content");
@@ -219,6 +229,7 @@ public class AgentSessionLogReader {
     private List<Map<String, Object>> convert(Map<String, Object> raw) {
         String role = lower(raw.get("role"));
         String content = stringValue(raw.get("content"));
+        if (isInternalLogMessage(raw, content)) return List.of();
         String toolCallId = stringValue(raw.get("toolCallId"));
         String id = stringValue(raw.get("id"));
 
@@ -392,6 +403,47 @@ public class AgentSessionLogReader {
         metadata.put("metadata", raw.get("metadata") instanceof Map<?, ?> map ? asMap(map) : Map.of());
         metadata.put("timestamp", raw.get("timestamp"));
         return metadata;
+    }
+
+    private boolean isInternalStateMessage(Map<String, Object> raw) {
+        String name = stringValue(raw.get("name"));
+        return isInternalName(name)
+                || contentStartsWith(raw.get("content"), COMPACTION_SUMMARY_PREFIX);
+    }
+
+    private boolean isInternalLogMessage(Map<String, Object> raw, String content) {
+        return isInternalName(stringValue(raw.get("name")))
+                || content.startsWith(COMPACTION_SUMMARY_PREFIX);
+    }
+
+    private boolean isInternalName(String name) {
+        return "__compaction_summary__".equals(name)
+                || "__system__".equals(name)
+                || "__internal__".equals(name);
+    }
+
+    private boolean isInternalFrontendMessage(Map<String, Object> message) {
+        Object metadataRaw = message.get("metadata");
+        if (metadataRaw instanceof Map<?, ?> metadata
+                && "__compaction_summary__".equals(stringValue(metadata.get("original_name")))) {
+            return true;
+        }
+        return firstText(message).startsWith(COMPACTION_SUMMARY_PREFIX);
+    }
+
+    private boolean contentStartsWith(Object content, String prefix) {
+        if (content instanceof String text) return text.startsWith(prefix);
+        if (!(content instanceof List<?> blocks) || blocks.isEmpty()) return false;
+        Object first = blocks.get(0);
+        return first instanceof Map<?, ?> block && stringValue(block.get("text")).startsWith(prefix);
+    }
+
+    private String firstText(Map<String, Object> message) {
+        Object content = message.get("content");
+        if (!(content instanceof List<?> blocks) || blocks.isEmpty()) return "";
+        Object first = blocks.get(0);
+        if (!(first instanceof Map<?, ?> block)) return "";
+        return stringValue(block.get("text"));
     }
 
     private String rawId(Map<String, Object> raw) {

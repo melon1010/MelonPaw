@@ -44,22 +44,28 @@ public class BackupCompatController {
                 return ResponseEntity.notFound().build();
             }
             Map<String, Object> detail = new LinkedHashMap<>(backupMeta(backup));
-            detail.put("files", List.of());
-            detail.put("manifest", Map.of("available", false));
+            detail.put("workspace_stats", Map.of());
             return ResponseEntity.ok(detail);
         });
     }
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<Map<String, Object>>> createBackupStream() {
+    public Flux<ServerSentEvent<Map<String, Object>>> createBackupStream(@RequestBody(required = false) Map<String, Object> body) {
         return Mono.fromCallable(() -> {
-                    Path backup = backupService.createBackup();
+                    Map<String, Object> scope = mapValue(body != null ? body.get("scope") : null);
+                    Path backup = backupService.createBackup(
+                            stringValue(body != null ? body.get("name") : null, ""),
+                            stringValue(body != null ? body.get("description") : null, ""),
+                            scope,
+                            stringList(body != null ? body.get("agents") : null)
+                    );
                     return backupMeta(backup);
                 })
                 .flux()
                 .flatMap(meta -> Flux.just(
-                        ServerSentEvent.builder(Map.<String, Object>of("type", "progress", "message", "Creating backup", "progress", 50)).build(),
-                        ServerSentEvent.builder(Map.<String, Object>of("type", "done", "meta", meta)).build()
+                        ServerSentEvent.builder(Map.<String, Object>of("type", "start", "total_agents", meta.get("agent_count"), "percent", 0)).build(),
+                        ServerSentEvent.builder(Map.<String, Object>of("type", "saving", "percent", 80)).build(),
+                        ServerSentEvent.builder(Map.<String, Object>of("type", "done", "meta", meta, "percent", 100)).build()
                 ))
                 .onErrorResume(error -> Flux.just(ServerSentEvent.builder(Map.<String, Object>of(
                         "type", "error",
@@ -75,7 +81,7 @@ public class BackupCompatController {
                 return ResponseEntity.notFound().build();
             }
             backupService.restoreBackup(backup);
-            return ResponseEntity.ok(Map.of("restored", true, "id", id));
+            return ResponseEntity.ok(Map.of("ok", true, "preserved_local_keys", List.of()));
         });
     }
 
@@ -84,18 +90,20 @@ public class BackupCompatController {
         return Mono.fromCallable(() -> {
             List<String> ids = stringList(body.get("ids"));
             List<String> deleted = new ArrayList<>();
-            List<String> missing = new ArrayList<>();
+            List<Map<String, Object>> failed = new ArrayList<>();
             for (String id : ids) {
                 Path backup = findBackup(id);
                 if (backup == null) {
-                    missing.add(id);
+                    failed.add(Map.of("id", id, "reason", "not_found"));
                     continue;
                 }
                 if (backupService.deleteBackup(backup)) {
                     deleted.add(id);
+                } else {
+                    failed.add(Map.of("id", id, "reason", "not_deleted"));
                 }
             }
-            return ResponseEntity.ok(Map.of("deleted", deleted, "missing", missing));
+            return ResponseEntity.ok(Map.of("deleted", deleted, "failed", failed));
         });
     }
 
@@ -129,7 +137,7 @@ public class BackupCompatController {
             return filePart.transferTo(temp)
                     .then(Mono.<ResponseEntity<?>>fromCallable(() -> {
                         Path imported = backupService.importBackup(temp, filePart.filename());
-                        return ResponseEntity.ok(Map.of("imported", true, "backup", backupMeta(imported)));
+                        return ResponseEntity.ok(backupMeta(imported));
                     }))
                     .doFinally(signal -> {
                         try {
@@ -141,11 +149,11 @@ public class BackupCompatController {
     }
 
     private Map<String, Object> backupMeta(Path backup) {
-        Map<String, Object> meta = new LinkedHashMap<>();
+        Map<String, Object> meta = new LinkedHashMap<>(backupService.readMeta(backup));
         String name = backup.getFileName().toString();
-        meta.put("id", name);
-        meta.put("name", name.replaceFirst("\\.zip$", ""));
-        meta.put("description", "");
+        meta.putIfAbsent("id", name);
+        meta.putIfAbsent("name", name.replaceFirst("\\.zip$", ""));
+        meta.putIfAbsent("description", "");
         meta.put("filename", name);
         meta.put("path", backup.toString());
         try {
@@ -155,17 +163,17 @@ public class BackupCompatController {
             meta.put("size", 0);
             meta.put("created_at", Instant.EPOCH.toString());
         }
-        meta.put("status", "completed");
-        meta.put("trusted", true);
-        meta.put("scope", Map.of(
+        meta.putIfAbsent("status", "completed");
+        meta.putIfAbsent("trusted", true);
+        meta.putIfAbsent("scope", Map.of(
                 "include_agents", true,
                 "include_global_config", true,
                 "include_secrets", true,
                 "include_skill_pool", true
         ));
-        meta.put("agent_count", 0);
-        meta.put("signature", "");
-        meta.put("accepted_via_trust", false);
+        meta.putIfAbsent("agent_count", 0);
+        meta.putIfAbsent("signature", "");
+        meta.putIfAbsent("accepted_via_trust", false);
         return meta;
     }
 
@@ -185,5 +193,18 @@ public class BackupCompatController {
             return List.of(text);
         }
         return List.of();
+    }
+
+    private String stringValue(Object value, String fallback) {
+        return value == null ? fallback : String.valueOf(value);
+    }
+
+    private Map<String, Object> mapValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> result.put(String.valueOf(key), item));
+            return result;
+        }
+        return Map.of();
     }
 }

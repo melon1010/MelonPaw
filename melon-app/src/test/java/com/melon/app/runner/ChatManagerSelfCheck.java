@@ -140,6 +140,29 @@ public final class ChatManagerSelfCheck {
             throw new AssertionError("tool result state should not remain running: " + ordered);
         }
 
+        Path compactStateWithLog = home.resolve("state/default/s6");
+        Files.createDirectories(compactStateWithLog);
+        Files.writeString(compactStateWithLog.resolve("agent_state.json"), """
+                {"context":[
+                  {"id":"summary","role":"USER","name":"__compaction_summary__","content":[{"type":"text","text":"bad summary"}]},
+                  {"id":"late","role":"ASSISTANT","content":[{"type":"text","text":"late answer"}]}
+                ]}
+                """);
+        Path sessionLog = home.resolve("workspaces/default/agents/default/sessions");
+        Files.createDirectories(sessionLog);
+        Files.writeString(sessionLog.resolve("s6.log.jsonl"), """
+                {"type":"message","id":"summary-log","timestamp":0.5,"role":"USER","content":"You are in the middle of a conversation that has been summarized.\\n\\n<summary>hidden</summary>"}
+                {"type":"message","id":"u-log","timestamp":1.0,"role":"USER","content":"original question"}
+                {"type":"message","id":"a-log","timestamp":2.0,"role":"ASSISTANT","content":"I will read.\\n[tool_call: read_file({\\"file_path\\":\\"AGENTS.md\\"})]","toolCallId":"call-read"}
+                {"type":"message","id":"t-log","timestamp":3.0,"role":"TOOL","content":"[tool_result: read_file] ok","toolCallId":"call-read"}
+                """);
+        manager.saveSessionShadowFromStateStore("default", "console", "u1", "s6", List.of());
+        Map<String, Object> repaired = JsonUtils.loadAsMap(home.resolve("workspaces/default/sessions/console/u1_s6.json"));
+        String repairedText = repaired.toString();
+        if (!repairedText.contains("original question") || repairedText.contains("bad summary") || repairedText.contains("<summary>hidden</summary>")) {
+            throw new AssertionError("compacted state should be repaired from jsonl before saving: " + repaired);
+        }
+
         Path legacyDir = home.resolve("chats");
         Files.createDirectories(legacyDir);
         Files.writeString(legacyDir.resolve("legacy.json"), """

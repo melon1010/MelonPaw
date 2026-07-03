@@ -26,8 +26,8 @@ public class ReadFileTool {
     @Tool(name = "read_file", description = "Read the contents of a file. Supports line range selection.", readOnly = true)
     public String readFile(
             @ToolParam(name = "file_path", description = "Path to the file to read") String filePath,
-            @ToolParam(name = "start_line", description = "Starting line number (1-based, optional)") Integer startLine,
-            @ToolParam(name = "end_line", description = "Ending line number (1-based, optional)") Integer endLine
+            @ToolParam(name = "start_line", description = "Starting line number (1-based, optional)", required = false) Integer startLine,
+            @ToolParam(name = "end_line", description = "Ending line number (1-based, optional)", required = false) Integer endLine
     ) {
         try {
             Path path = pathResolver.resolve(filePath);
