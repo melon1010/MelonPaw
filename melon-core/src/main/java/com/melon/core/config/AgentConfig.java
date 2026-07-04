@@ -51,6 +51,9 @@ public class AgentConfig {
     @JsonProperty("heartbeat")
     private HeartbeatConfig heartbeat = new HeartbeatConfig();
 
+    @JsonProperty("channels")
+    private Map<String, Map<String, Object>> channels = Map.of();
+
     @JsonProperty("language")
     private String language = "zh";
 
@@ -101,6 +104,9 @@ public class AgentConfig {
 
     public HeartbeatConfig getHeartbeat() { return heartbeat; }
     public void setHeartbeat(HeartbeatConfig heartbeat) { this.heartbeat = heartbeat; }
+
+    public Map<String, Map<String, Object>> getChannels() { return channels; }
+    public void setChannels(Map<String, Map<String, Object>> channels) { this.channels = channels; }
 
     public String getLanguage() { return language; }
     public void setLanguage(String language) { this.language = language; }

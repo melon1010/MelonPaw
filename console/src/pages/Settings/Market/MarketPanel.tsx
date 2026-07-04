@@ -1,9 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Input, Tooltip } from "@agentscope-ai/design";
+import { Button, Input, Select, Tooltip } from "@agentscope-ai/design";
 import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAgentStore } from "../../../stores/agentStore";
-import { PageHeader } from "@/components/PageHeader";
 import { useMarketSearch } from "./useMarketSearch";
 import {
   useMarketInstall,
@@ -114,10 +113,10 @@ const ProviderChips = memo(function ProviderChips({
 });
 
 /**
- * Single-select category tabs (second filter layer).
- * The leading "All" tab clears the filter.
+ * Single-select category dropdown (second filter layer).
+ * The leading "All" option clears the filter.
  */
-const CategoryTabs = memo(function CategoryTabs({
+const CategorySelect = memo(function CategorySelect({
   categories,
   active,
   onSelect,
@@ -127,37 +126,26 @@ const CategoryTabs = memo(function CategoryTabs({
   onSelect: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  const tabs = [{ id: "", label: t("market.categoryAll") }, ...categories];
+  const options = useMemo(
+    () => [
+      { value: "", label: t("market.categoryAll") },
+      ...categories.map((c) => ({ value: c.id, label: c.label })),
+    ],
+    [categories, t],
+  );
   return (
-    <div className={styles.categoryTabs}>
-      {tabs.map((c) => {
-        const isActive = active === c.id;
-        const klass = [
-          styles.categoryTab,
-          isActive ? styles.categoryTabActive : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return (
-          <span
-            key={c.id || "__all__"}
-            className={klass}
-            onClick={() => onSelect(c.id)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelect(c.id);
-              }
-            }}
-            aria-pressed={isActive}
-          >
-            {c.label}
-          </span>
-        );
-      })}
-    </div>
+    <Select
+      className={styles.categorySelect}
+      value={active || undefined}
+      onChange={(v) => onSelect(v ?? "")}
+      options={options}
+      placeholder={t("market.categoryPlaceholder")}
+      showSearch
+      allowClear
+      optionFilterProp="label"
+      popupMatchSelectWidth={false}
+      aria-label={t("market.categoryPlaceholder")}
+    />
   );
 });
 
@@ -183,53 +171,33 @@ function LoadMoreSentinel({ onVisible }: { onVisible: () => void }) {
   );
 }
 
-function MarketPage() {
+/**
+ * Embeddable market browser. The host page fixes the install destination:
+ * Skills page saves into the current agent's workspace, Skill Pool page
+ * imports into the pool.
+ */
+export function MarketPanel({
+  installTarget,
+}: {
+  installTarget: InstallTarget;
+}) {
   const { t } = useTranslation();
   const selectedAgent = useAgentStore((s) => s.selectedAgent);
   const market = useMarketSearch();
-  const [cardTargets, setCardTargets] = useState<Record<string, InstallTarget>>(
-    {},
-  );
   const [detailItem, setDetailItem] = useState<MarketResult | null>(null);
-
-  // Use ref to avoid stale closure in callbacks that depend on latest cardTargets
-  const cardTargetsRef = useRef(cardTargets);
-  cardTargetsRef.current = cardTargets;
-
-  const targetFor = useCallback(
-    (item: MarketResult): InstallTarget =>
-      cardTargetsRef.current[getCardKey(item)] ?? "workspace",
-    [],
-  );
-
-  const setCardTarget = useCallback(
-    (item: MarketResult, next: InstallTarget) => {
-      setCardTargets((prev) => ({ ...prev, [getCardKey(item)]: next }));
-    },
-    [],
-  );
 
   const install = useMarketInstall({ selectedAgent });
 
   const onInstall = useCallback(
     (item: MarketResult) => {
-      const target = cardTargetsRef.current[getCardKey(item)] ?? "workspace";
-      install.enqueue([item], target);
+      install.enqueue([item], installTarget);
     },
-    [install],
+    [install, installTarget],
   );
 
   // Stable callbacks for DetailDrawer
   const detailItemRef = useRef(detailItem);
   detailItemRef.current = detailItem;
-
-  const handleDetailTargetChange = useCallback(
-    (next: InstallTarget) => {
-      const current = detailItemRef.current;
-      if (current) setCardTarget(current, next);
-    },
-    [setCardTarget],
-  );
 
   const handleDetailInstall = useCallback(() => {
     const current = detailItemRef.current;
@@ -242,12 +210,6 @@ function MarketPage() {
   const handleDetailClose = useCallback(() => {
     setDetailItem(null);
   }, []);
-
-  // Memoize breadcrumb items to avoid re-creating each render
-  const headerItems = useMemo(
-    () => [{ title: t("nav.settings") }, { title: t("nav.market") }],
-    [t],
-  );
 
   const browseHintLabel = useMemo(() => {
     if (market.query.trim() || market.category) return "";
@@ -269,40 +231,38 @@ function MarketPage() {
 
   return (
     <div className={styles.marketPage}>
-      <PageHeader items={headerItems} />
       <div className={styles.content}>
-        <ProviderChips
-          providers={market.providers}
-          selectedKeys={market.selectedProviderKeys}
-          onToggle={market.toggleProvider}
-        />
-
         <div className={styles.toolbar}>
-          {market.query.trim() ? (
-            <div className={styles.searchHint}>
-              {!market.loading &&
-                !market.globalError &&
-                t("market.searchResult", {
-                  keyword: market.query.trim(),
-                  count: market.totalCount,
-                })}
-            </div>
-          ) : (
-            <CategoryTabs
+          <ProviderChips
+            providers={market.providers}
+            selectedKeys={market.selectedProviderKeys}
+            onToggle={market.toggleProvider}
+          />
+          <div className={styles.filters}>
+            <CategorySelect
               categories={market.categories}
               active={market.category}
               onSelect={market.setCategory}
             />
-          )}
-          <Input.Search
-            className={styles.searchInput}
-            placeholder={t("market.searchPlaceholder")}
-            allowClear
-            value={market.query}
-            onChange={(e) => market.setQuery(e.target.value)}
-            aria-label={t("market.searchPlaceholder")}
-          />
+            <Input.Search
+              className={styles.searchInput}
+              placeholder={t("market.searchPlaceholder")}
+              allowClear
+              value={market.query}
+              onChange={(e) => market.setQuery(e.target.value)}
+              aria-label={t("market.searchPlaceholder")}
+            />
+          </div>
         </div>
+
+        {market.query.trim() && !market.loading && !market.globalError && (
+          <div className={styles.searchHint}>
+            {t("market.searchResult", {
+              keyword: market.query.trim(),
+              count: market.totalCount,
+            })}
+          </div>
+        )}
 
         {browseHintLabel && (
           <div className={styles.browseHint}>
@@ -341,8 +301,6 @@ function MarketPage() {
                 <ResultCard
                   key={getCardKey(item)}
                   item={item}
-                  target={targetFor(item)}
-                  onTargetChange={(next) => setCardTarget(item, next)}
                   onInstall={() => onInstall(item)}
                   onOpenDetail={() => setDetailItem(item)}
                 />
@@ -371,7 +329,7 @@ function MarketPage() {
       {install.queue.length > 0 && (
         <InstallQueuePanel
           queue={install.queue}
-          onClearCompleted={install.clearCompleted}
+          onClearCompleted={install.clearFinished}
           onCancel={install.cancel}
           onRetry={install.retry}
         />
@@ -379,13 +337,9 @@ function MarketPage() {
 
       <DetailDrawer
         item={detailItem}
-        target={detailItem ? targetFor(detailItem) : "workspace"}
-        onTargetChange={handleDetailTargetChange}
         onInstall={handleDetailInstall}
         onClose={handleDetailClose}
       />
     </div>
   );
 }
-
-export default MarketPage;

@@ -1,83 +1,71 @@
 package com.melon.tools.agent;
 
-import reactor.core.publisher.Mono;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
-import io.agentscope.core.message.ToolResultBlock;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Submits a task to a target agent asynchronously (fire-and-forget).
- * Corresponds to Python submit_to_agent tool.
- * Uses a shared thread pool and task registry for async execution.
+ * Background inter-agent task submission. Mirrors Python submit_to_agent.
  */
 public class SubmitToAgentTool extends ToolBase {
 
     private static final Logger log = LoggerFactory.getLogger(SubmitToAgentTool.class);
-
     private static final int MAX_POOL_SIZE = 4;
-    private static final AtomicInteger taskCounter = new AtomicInteger(0);
+    private static final AtomicInteger THREAD_COUNTER = new AtomicInteger(0);
 
-    /** Shared thread pool for async task execution */
-    private static final ExecutorService taskExecutor = Executors.newFixedThreadPool(MAX_POOL_SIZE, r -> {
-        Thread t = new Thread(r, "agent-task-" + taskCounter.incrementAndGet());
+    private static final ExecutorService TASK_EXECUTOR = Executors.newFixedThreadPool(MAX_POOL_SIZE, r -> {
+        Thread t = new Thread(r, "agent-task-" + THREAD_COUNTER.incrementAndGet());
         t.setDaemon(true);
         return t;
     });
-
-    /** Shared task registry for tracking submitted tasks */
-    private static final ConcurrentHashMap<String, TaskEntry> taskRegistry = new ConcurrentHashMap<>();
-
-    /** Optional callback for executing agent tasks (wired by app layer) */
-    private static AsyncTaskCallback asyncTaskCallback;
-
-    /**
-     * Functional interface for async task execution.
-     * The app layer can wire this to AgentRunner for real inter-agent execution.
-     */
-    @FunctionalInterface
-    public interface AsyncTaskCallback {
-        String execute(String agentId, String task) throws Exception;
-    }
-
-    /**
-     * Sets the async task callback for real agent execution.
-     */
-    public static void setAsyncTaskCallback(AsyncTaskCallback callback) {
-        asyncTaskCallback = callback;
-    }
-
-    /**
-     * Gets the shared task registry (used by CheckAgentTaskTool).
-     */
-    public static ConcurrentHashMap<String, TaskEntry> getTaskRegistry() {
-        return taskRegistry;
-    }
+    private static final ScheduledExecutorService TIMEOUT_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "agent-task-timeout");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final ConcurrentHashMap<String, TaskEntry> TASK_REGISTRY = new ConcurrentHashMap<>();
 
     public SubmitToAgentTool() {
         super(ToolBase.builder()
             .name("submit_to_agent")
-            .description("Submit a task to another agent asynchronously. Returns a task ID for later result retrieval.")
+            .description("Submit a background message to another configured agent. Returns a task ID for later result retrieval.")
             .inputSchema(parseSchema("""
                 {
                   "type": "object",
                   "properties": {
-                    "agent_id": {
+                    "to_agent": {
                       "type": "string",
-                      "description": "Target agent ID"
+                      "description": "Target agent ID returned by list_agents"
                     },
-                    "task": {
+                    "text": {
                       "type": "string",
-                      "description": "Task description to submit"
+                      "description": "Task text to send to the target agent"
+                    },
+                    "session_id": {
+                      "type": "string",
+                      "description": "Existing inter-agent session ID to continue"
+                    },
+                    "task_timeout": {
+                      "type": "number",
+                      "description": "Optional task execution timeout in seconds"
                     }
                   },
-                  "required": ["agent_id", "task"]
+                  "required": ["to_agent", "text"]
                 }"""))
             .readOnly(false)
             .concurrencySafe(false));
@@ -93,88 +81,154 @@ public class SubmitToAgentTool extends ToolBase {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        String agentId = (String) param.getInput().get("agent_id");
-        String task = (String) param.getInput().get("task");
+        Map<String, Object> input = param.getInput();
+        String toAgent = AgentChatBridge.normalizeId(input.get("to_agent"));
+        String text = AgentChatBridge.text(input, "text");
+        String sessionId = AgentChatBridge.normalizeId(input.get("session_id"));
+        Double taskTimeout = AgentChatBridge.doubleValue(input.get("task_timeout"));
 
-        if (agentId == null || agentId.isBlank()) {
-            return Mono.just(ToolResultBlock.error("agent_id is required"));
+        if (toAgent == null) {
+            return Mono.just(ToolResultBlock.error("ERROR: 'to_agent' is required for submission"));
         }
-        if (task == null || task.isBlank()) {
-            return Mono.just(ToolResultBlock.error("task is required"));
+        if (text == null || text.isBlank()) {
+            return Mono.just(ToolResultBlock.error("ERROR: 'text' is required for submission"));
         }
 
-        // Generate a unique task ID
-        String taskId = "task-" + System.currentTimeMillis() + "-" + taskCounter.incrementAndGet();
+        String fromAgent = AgentChatBridge.callingAgentId(param);
+        String finalSessionId = sessionId != null ? sessionId : AgentChatBridge.generateSessionId(fromAgent, toAgent);
+        String finalText = AgentChatBridge.ensureIdentityPrefix(text, fromAgent);
+        String rootSessionId = AgentChatBridge.rootSessionId(param);
 
-        // Create task entry with PENDING status
-        TaskEntry entry = new TaskEntry(taskId, agentId, task);
-        taskRegistry.put(taskId, entry);
-
-        // Submit to thread pool for async execution
-        taskExecutor.submit(() -> {
-            entry.setStatus(TaskStatus.RUNNING);
-            try {
-                String result;
-                if (asyncTaskCallback != null) {
-                    // Use the wired callback for real agent execution
-                    result = asyncTaskCallback.execute(agentId, task);
-                } else {
-                    // Fallback: simulate execution
-                    log.info("Executing task {} for agent {} (no callback wired)", taskId, agentId);
-                    Thread.sleep(100); // Simulate minimal work
-                    result = "Task completed for agent '" + agentId + "': " + task;
-                }
-                entry.setResult(result);
-                entry.setStatus(TaskStatus.COMPLETED);
-                log.info("Task {} completed for agent {}", taskId, agentId);
-            } catch (Exception e) {
-                entry.setError(e.getMessage());
-                entry.setStatus(TaskStatus.FAILED);
-                log.error("Task {} failed for agent {}: {}", taskId, agentId, e.getMessage(), e);
-            }
-        });
-
-        log.info("Submitted task {} to agent {}: {}", taskId, agentId, task);
-        return Mono.just(ToolResultBlock.text("Task submitted to agent '" + agentId + "'. Task ID: " + taskId));
+        AgentChatBridge.AgentRequest request = new AgentChatBridge.AgentRequest(
+                toAgent,
+                finalText,
+                finalSessionId,
+                fromAgent,
+                rootSessionId,
+                300
+        );
+        TaskEntry entry = submit(request, taskTimeout);
+        return Mono.just(ToolResultBlock.text(formatBackgroundSubmissionText(entry)));
     }
 
-    /**
-     * Task entry stored in the registry.
-     */
+    public static TaskEntry submit(AgentChatBridge.AgentRequest request, Double taskTimeoutSeconds) {
+        String taskId = "task-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        TaskEntry entry = new TaskEntry(taskId, request.toAgent(), request.text(), request.sessionId());
+        TASK_REGISTRY.put(taskId, entry);
+
+        Future<?> future = TASK_EXECUTOR.submit(() -> {
+            entry.markRunning();
+            try {
+                String result = AgentChatBridge.execute(request);
+                entry.markCompleted(result);
+                log.info("Agent task completed: task={}, agent={}, session={}", taskId, request.toAgent(), request.sessionId());
+            } catch (Exception e) {
+                entry.markFailed(e.getMessage());
+                log.error("Agent task failed: task={}, agent={}, session={}", taskId, request.toAgent(), request.sessionId(), e);
+            }
+        });
+        entry.setFuture(future);
+
+        if (taskTimeoutSeconds != null && taskTimeoutSeconds > 0) {
+            long timeoutMillis = Math.max(1L, Math.round(taskTimeoutSeconds * 1000));
+            TIMEOUT_EXECUTOR.schedule(() -> {
+                if (!future.isDone()) {
+                    future.cancel(true);
+                    entry.markFailed("Task cancelled after timeout");
+                }
+            }, timeoutMillis, TimeUnit.MILLISECONDS);
+        }
+
+        return entry;
+    }
+
+    public static TaskEntry getTask(String taskId) {
+        return TASK_REGISTRY.get(taskId);
+    }
+
+    public static Map<String, Object> statusPayload(String taskId) {
+        TaskEntry entry = getTask(taskId);
+        if (entry == null) return null;
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("status", entry.getLifecycleStatus());
+        response.put("started_at", entry.getStartedAt() > 0 ? entry.getStartedAt() / 1000.0 : entry.getCreatedAt() / 1000.0);
+        if ("finished".equals(entry.getLifecycleStatus())) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("status", entry.getResultStatus());
+            result.put("session_id", entry.getSessionId());
+            if ("completed".equals(entry.getResultStatus())) {
+                result.put("output", java.util.List.of(Map.of(
+                        "content", java.util.List.of(Map.of("type", "text", "text", entry.getResult() != null ? entry.getResult() : ""))
+                )));
+            } else {
+                result.put("error", Map.of("message", entry.getError() != null ? entry.getError() : "Unknown error"));
+            }
+            response.put("result", result);
+        }
+        return response;
+    }
+
+    public static String formatBackgroundSubmissionText(TaskEntry entry) {
+        return String.join("\n",
+                "[TASK_ID: " + entry.getTaskId() + "]",
+                "[SESSION: " + entry.getSessionId() + "]",
+                "",
+                "Task submitted successfully.",
+                "Check status with: check_agent_task(task_id='" + entry.getTaskId() + "')"
+        );
+    }
+
     public static class TaskEntry {
         private final String taskId;
         private final String agentId;
-        private final String task;
+        private final String text;
+        private final String sessionId;
         private final long createdAt;
-        private volatile TaskStatus status = TaskStatus.PENDING;
+        private volatile String lifecycleStatus = "submitted";
+        private volatile String resultStatus;
         private volatile String result;
         private volatile String error;
-        private volatile long completedAt;
+        private volatile long startedAt;
+        private volatile long finishedAt;
+        private volatile Future<?> future;
 
-        public TaskEntry(String taskId, String agentId, String task) {
+        public TaskEntry(String taskId, String agentId, String text, String sessionId) {
             this.taskId = taskId;
             this.agentId = agentId;
-            this.task = task;
+            this.text = text;
+            this.sessionId = sessionId;
             this.createdAt = System.currentTimeMillis();
+        }
+
+        void setFuture(Future<?> future) { this.future = future; }
+        void markRunning() {
+            this.lifecycleStatus = "running";
+            this.startedAt = System.currentTimeMillis();
+        }
+        void markCompleted(String result) {
+            this.result = result;
+            this.resultStatus = "completed";
+            this.lifecycleStatus = "finished";
+            this.finishedAt = System.currentTimeMillis();
+        }
+        void markFailed(String error) {
+            this.error = error;
+            this.resultStatus = "failed";
+            this.lifecycleStatus = "finished";
+            this.finishedAt = System.currentTimeMillis();
         }
 
         public String getTaskId() { return taskId; }
         public String getAgentId() { return agentId; }
-        public String getTask() { return task; }
+        public String getText() { return text; }
+        public String getSessionId() { return sessionId; }
         public long getCreatedAt() { return createdAt; }
-        public TaskStatus getStatus() { return status; }
-        public void setStatus(TaskStatus status) { this.status = status; }
+        public String getLifecycleStatus() { return lifecycleStatus; }
+        public String getResultStatus() { return resultStatus; }
         public String getResult() { return result; }
-        public void setResult(String result) { this.result = result; this.completedAt = System.currentTimeMillis(); }
         public String getError() { return error; }
-        public void setError(String error) { this.error = error; this.completedAt = System.currentTimeMillis(); }
-        public long getCompletedAt() { return completedAt; }
-    }
-
-    /**
-     * Task status enum.
-     */
-    public enum TaskStatus {
-        PENDING, RUNNING, COMPLETED, FAILED
+        public long getStartedAt() { return startedAt; }
+        public long getFinishedAt() { return finishedAt; }
+        public Future<?> getFuture() { return future; }
     }
 }

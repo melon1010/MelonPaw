@@ -70,8 +70,6 @@ function resolveSupportedExternalUrl(url: string): string | null {
   return resolvedUrl;
 }
 
-// Runtime priority is intentional: the legacy pywebview bridge has its own
-// opener. Everything else uses the browser.
 /** Choose which runtime should handle a validated external URL. */
 function detectExternalLinkRuntime(fullUrl: string): ExternalLinkRuntime {
   const pywebviewApi = getPyWebViewApi();

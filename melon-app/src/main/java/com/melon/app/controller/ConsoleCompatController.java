@@ -13,6 +13,8 @@ import com.melon.core.config.ConfigManager;
 import com.melon.core.agent.CommandHandler;
 import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.util.SafePathUtil;
+import com.melon.tools.agent.AgentChatBridge;
+import com.melon.tools.agent.SubmitToAgentTool;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
@@ -96,8 +98,14 @@ public class ConsoleCompatController {
         env.put("channel", channel);
         env.put("source", "console");
         env.put("session_id", sessionId);
+        env.put("root_session_id", stringValue(body.get("root_session_id"), sessionId));
         if (body.get("env_info") instanceof Map<?, ?> envInfo) {
             for (var entry : envInfo.entrySet()) {
+                env.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        if (body.get("request_context") instanceof Map<?, ?> requestContext) {
+            for (var entry : requestContext.entrySet()) {
                 env.put(String.valueOf(entry.getKey()), entry.getValue());
             }
         }
@@ -112,7 +120,7 @@ public class ConsoleCompatController {
                 .doFinally(signal -> {
                     chatManager.setStatus(agentId, chatId, "idle");
                     chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId,
-                            frontendContext, envelope.turnUsageSnapshot());
+                            sessionContext(frontendContext, envelope.outputStateMessagesSnapshot()), envelope.turnUsageSnapshot());
                     log.info("Console chat finished: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal);
                 })
                 .onErrorResume(e -> {
@@ -120,7 +128,7 @@ public class ConsoleCompatController {
                     chatManager.setStatus(agentId, chatId, "idle");
                     List<ServerSentEvent<String>> errorEvents = envelope.error(e);
                     chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId,
-                            frontendContext, envelope.turnUsageSnapshot());
+                            sessionContext(frontendContext, envelope.outputStateMessagesSnapshot()), envelope.turnUsageSnapshot());
                     return Flux.fromIterable(errorEvents);
                 });
     }
@@ -128,6 +136,44 @@ public class ConsoleCompatController {
     @PostMapping("/chat/stop")
     public Mono<ResponseEntity<?>> stopChat(@RequestParam(value = "chat_id", required = false) String chatId) {
         return Mono.just(ResponseEntity.ok(Map.of("stopped", true, "chat_id", chatId != null ? chatId : "")));
+    }
+
+    @PostMapping("/chat/task")
+    public Mono<ResponseEntity<?>> submitChatTask(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String userId = stringValue(body.get("user_id"), headerUserId != null ? headerUserId : "default");
+        String sessionId = stringValue(body.get("session_id"), "default");
+        String text = modelFacingText(frontendUserMessages(agentId, body.get("input")));
+        if (text.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().body(Map.of("detail", "input text is required")));
+        }
+        Map<String, Object> requestContext = objectMap(body.get("request_context"));
+        String rootSessionId = stringValue(body.get("root_session_id"),
+                stringValue(requestContext.get("root_session_id"), sessionId));
+        String rootAgentId = stringValue(requestContext.get("root_agent_id"),
+                stringValue(requestContext.get("root_agent"), userId));
+        Double taskTimeout = AgentChatBridge.doubleValue(body.get("timeout"));
+        AgentChatBridge.AgentRequest request = new AgentChatBridge.AgentRequest(
+                agentId,
+                text,
+                sessionId,
+                rootAgentId,
+                rootSessionId,
+                300
+        );
+        SubmitToAgentTool.TaskEntry entry = SubmitToAgentTool.submit(request, taskTimeout);
+        return Mono.just(ResponseEntity.ok(Map.of("task_id", entry.getTaskId())));
+    }
+
+    @GetMapping("/chat/task/{taskId}")
+    public Mono<ResponseEntity<?>> getChatTask(@PathVariable String taskId) {
+        Map<String, Object> payload = SubmitToAgentTool.statusPayload(taskId);
+        if (payload == null) {
+            return Mono.just(ResponseEntity.status(404).body(Map.of("detail", "Task not found: " + taskId)));
+        }
+        return Mono.just(ResponseEntity.ok(payload));
     }
 
     @GetMapping("/push-messages")
@@ -269,6 +315,14 @@ public class ConsoleCompatController {
 
     private List<Map<String, Object>> optionalList(Map<String, Object> value) {
         return value != null ? List.of(value) : List.of();
+    }
+
+    private Map<String, Object> objectMap(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> raw) {
+            raw.forEach((key, item) -> result.put(String.valueOf(key), item));
+        }
+        return result;
     }
 
     private List<Map<String, Object>> frontendUserMessages(String agentId, Object input) {
@@ -430,6 +484,13 @@ public class ConsoleCompatController {
         assistant.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")));
         context.add(assistant);
         chatManager.saveSessionShadow(agentId, channel, userId, sessionId, Map.of("context", context));
+    }
+
+    private List<Map<String, Object>> sessionContext(List<Map<String, Object>> frontendContext,
+                                                     List<Map<String, Object>> outputContext) {
+        List<Map<String, Object>> context = new ArrayList<>(frontendContext != null ? frontendContext : List.of());
+        if (outputContext != null) context.addAll(outputContext);
+        return context;
     }
 
     private String uploadedAbsolutePath(Map<String, Object> item) {

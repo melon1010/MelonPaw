@@ -8,6 +8,12 @@ export type UpdatePhase =
   | "downloaded"
   | "failed";
 
+interface UpdateError {
+  stage?: string;
+  kind?: string;
+  message: string;
+}
+
 interface ContextValue {
   phase: UpdatePhase;
   isBackground: boolean;
@@ -18,7 +24,7 @@ interface ContextValue {
   downloaded: number;
   total: number | null;
   throughputBps: number;
-  error: { message: string } | null;
+  error: UpdateError | null;
   startInstall: () => Promise<void>;
   startBackgroundDownload: () => Promise<void>;
   installDownloaded: () => Promise<void>;

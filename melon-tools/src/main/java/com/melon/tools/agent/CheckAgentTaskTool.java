@@ -1,18 +1,17 @@
 package com.melon.tools.agent;
 
-import reactor.core.publisher.Mono;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
-import io.agentscope.core.message.ToolResultBlock;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Mono;
 
 import java.util.Map;
 
 /**
- * Checks the status and result of a previously submitted agent task.
- * Corresponds to Python check_agent_task tool.
+ * Checks background inter-agent task status. Mirrors Python check_agent_task.
  */
 public class CheckAgentTaskTool extends ToolBase {
 
@@ -21,14 +20,14 @@ public class CheckAgentTaskTool extends ToolBase {
     public CheckAgentTaskTool() {
         super(ToolBase.builder()
             .name("check_agent_task")
-            .description("Check the status and result of a previously submitted agent task by task ID.")
+            .description("Check the status and final result of a previously submitted background agent task.")
             .inputSchema(parseSchema("""
                 {
                   "type": "object",
                   "properties": {
                     "task_id": {
                       "type": "string",
-                      "description": "Task ID returned by submit_to_agent"
+                      "description": "Task ID returned by submit_to_agent or spawn_subagent(background=true)"
                     }
                   },
                   "required": ["task_id"]
@@ -47,40 +46,45 @@ public class CheckAgentTaskTool extends ToolBase {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        String taskId = (String) param.getInput().get("task_id");
-        if (taskId == null || taskId.isBlank()) {
-            return Mono.just(ToolResultBlock.error("task_id is required"));
+        String taskId = AgentChatBridge.normalizeId(param.getInput().get("task_id"));
+        if (taskId == null) {
+            return Mono.just(ToolResultBlock.error("ERROR: 'task_id' is required to check task status"));
         }
 
-        log.info("Check agent task: {}", taskId);
-
-        // Look up task in the shared registry
-        SubmitToAgentTool.TaskEntry entry = SubmitToAgentTool.getTaskRegistry().get(taskId);
+        log.info("check_agent_task: {}", taskId);
+        SubmitToAgentTool.TaskEntry entry = SubmitToAgentTool.getTask(taskId);
         if (entry == null) {
             return Mono.just(ToolResultBlock.error("Task not found: " + taskId));
         }
+        return Mono.just(ToolResultBlock.text(formatBackgroundStatusText(entry)));
+    }
 
-        SubmitToAgentTool.TaskStatus status = entry.getStatus();
+    public static String formatBackgroundStatusText(SubmitToAgentTool.TaskEntry entry) {
+        String status = entry.getLifecycleStatus();
         StringBuilder result = new StringBuilder();
-        result.append("Task ID: ").append(taskId).append("\n");
-        result.append("Agent: ").append(entry.getAgentId()).append("\n");
-        result.append("Status: ").append(status).append("\n");
-        result.append("Task: ").append(entry.getTask()).append("\n");
-        result.append("Created: ").append(entry.getCreatedAt()).append("\n");
+        result.append("[TASK_ID: ").append(entry.getTaskId()).append("]\n");
+        result.append("[STATUS: ").append(status).append("]\n\n");
 
-        if (status == SubmitToAgentTool.TaskStatus.COMPLETED) {
-            result.append("Completed: ").append(entry.getCompletedAt()).append("\n");
-            String taskResult = entry.getResult();
-            result.append("Result: ").append(taskResult != null ? taskResult : "(no result)");
-        } else if (status == SubmitToAgentTool.TaskStatus.FAILED) {
-            result.append("Completed: ").append(entry.getCompletedAt()).append("\n");
-            result.append("Error: ").append(entry.getError() != null ? entry.getError() : "(unknown error)");
-        } else {
-            // PENDING or RUNNING
-            long elapsed = System.currentTimeMillis() - entry.getCreatedAt();
-            result.append("Elapsed: ").append(elapsed / 1000).append("s");
+        if ("finished".equals(status)) {
+            if ("completed".equals(entry.getResultStatus())) {
+                result.append("Task completed.\n\n");
+                result.append(AgentChatBridge.formatAgentChatText(entry.getResult(), entry.getSessionId()));
+            } else {
+                result.append("Task failed.\n\n");
+                result.append("Error: ").append(entry.getError() != null ? entry.getError() : "Unknown error");
+            }
+            return result.toString();
         }
 
-        return Mono.just(ToolResultBlock.text(result.toString()));
+        if ("running".equals(status)) {
+            result.append("Task is still running...\n");
+            double started = entry.getStartedAt() > 0 ? entry.getStartedAt() / 1000.0 : entry.getCreatedAt() / 1000.0;
+            result.append("Started at: ").append(started);
+        } else if ("submitted".equals(status)) {
+            result.append("Task submitted, waiting to start...");
+        } else {
+            result.append("Task status: ").append(status);
+        }
+        return result.toString();
     }
 }

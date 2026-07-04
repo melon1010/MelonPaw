@@ -4,10 +4,15 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
+import com.melon.channels.ChannelAddress;
+import com.melon.channels.ChannelInboundMessage;
+import com.melon.channels.ChannelManager;
+import com.melon.channels.ChannelOutboundMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -25,10 +30,12 @@ public class CronExecutor {
 
     private final AgentRunner agentRunner;
     private final ChatManager chatManager;
+    private final ChannelManager channelManager;
 
-    public CronExecutor(AgentRunner agentRunner, ChatManager chatManager) {
+    public CronExecutor(AgentRunner agentRunner, ChatManager chatManager, ChannelManager channelManager) {
         this.agentRunner = agentRunner;
         this.chatManager = chatManager;
+        this.channelManager = channelManager;
     }
 
     /**
@@ -44,7 +51,11 @@ public class CronExecutor {
             return;
         }
         log.info("Executing cron job: id={}, agent={}, messageLen={}", job.getId(), agentId, message.length());
-        injectMessage(agentId, message, job.getId());
+        if (job.getDispatch() != null && !job.getDispatch().isEmpty()) {
+            injectDispatchedMessage(agentId, message, job.getId(), job.getDispatch(), ignored -> {}, err -> {});
+        } else {
+            injectMessage(agentId, message, job.getId());
+        }
     }
 
     /**
@@ -66,6 +77,29 @@ public class CronExecutor {
                               Consumer<Throwable> onError) {
         injectMessage(agentId, message, taskId, "default", "cron-" + taskId, "console", Map.of(),
                 onSuccess, onError);
+    }
+
+    public void injectDispatchedMessage(String agentId, String message, String taskId,
+                                        Map<String, Object> dispatch,
+                                        Consumer<ChannelOutboundMessage> onSuccess,
+                                        Consumer<Throwable> onError) {
+        try {
+            ChannelInboundMessage inbound = cronInbound(agentId, message, taskId, dispatch);
+            channelManager.enqueue(inbound, 20)
+                    .whenComplete((out, err) -> {
+                        if (err != null) {
+                            log.error("Cron task {} channel dispatch failed", taskId, err);
+                            onError.accept(err);
+                        } else {
+                            log.info("Cron task {} channel dispatch completed, replyLen={}",
+                                    taskId, out != null && out.getText() != null ? out.getText().length() : 0);
+                            onSuccess.accept(out);
+                        }
+                    });
+        } catch (Exception e) {
+            log.error("Cron task {} channel dispatch failed before enqueue", taskId, e);
+            onError.accept(e);
+        }
     }
 
     public void injectMessage(String agentId, String message, String taskId,
@@ -111,5 +145,51 @@ public class CronExecutor {
      */
     public void injectMessage(String message) {
         injectMessage("default", message, "adhoc-" + System.currentTimeMillis());
+    }
+
+    private ChannelInboundMessage cronInbound(String agentId, String message, String taskId, Map<String, Object> dispatch) {
+        Map<String, Object> target = map(dispatch != null ? dispatch.get("target") : null);
+        Map<String, Object> meta = new LinkedHashMap<>(map(dispatch != null ? dispatch.get("meta") : null));
+        String channel = value(stringValue(dispatch != null ? dispatch.get("channel") : null), "console");
+        String userId = value(stringValue(target.get("user_id")), "default");
+        String sessionId = value(stringValue(target.get("session_id")), "cron-" + taskId);
+        meta.put("source", "cron");
+        meta.put("task_id", taskId);
+        meta.put("channel", channel);
+        meta.putAll(target);
+
+        ChannelInboundMessage inbound = new ChannelInboundMessage();
+        inbound.setAgentId(agentId);
+        inbound.setChannel(channel);
+        inbound.setUserId(userId);
+        inbound.setSessionId(sessionId);
+        inbound.setContent(message);
+        inbound.setChannelMeta(meta);
+        inbound.setReplyTo(new ChannelAddress("cron", replyId(userId, meta), meta));
+        return inbound;
+    }
+
+    private String replyId(String userId, Map<String, Object> meta) {
+        for (String key : List.of("chat_id", "channel", "channel_id", "room_id", "group_id", "user_id", "reply_url")) {
+            String value = stringValue(meta.get(key));
+            if (!value.isBlank()) return value;
+        }
+        return userId;
+    }
+
+    private Map<String, Object> map(Object raw) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (raw instanceof Map<?, ?> map) {
+            map.forEach((key, value) -> result.put(String.valueOf(key), value));
+        }
+        return result;
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private String value(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

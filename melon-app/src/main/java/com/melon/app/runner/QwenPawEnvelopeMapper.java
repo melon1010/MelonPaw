@@ -161,6 +161,19 @@ public class QwenPawEnvelopeMapper {
         return visibleAssistantText.toString();
     }
 
+    public List<Map<String, Object>> outputMessagesSnapshot() {
+        return new ArrayList<>(outputMessages);
+    }
+
+    public List<Map<String, Object>> outputStateMessagesSnapshot() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> output : outputMessages) {
+            Map<String, Object> message = outputToStateMessage(output);
+            if (!message.isEmpty()) result.add(message);
+        }
+        return result;
+    }
+
     public Map<String, Object> turnUsageSnapshot() {
         Map<String, Object> usagePayload = usagePayload();
         Map<String, Object> contextUsage = contextUsagePayload(usagePayload);
@@ -550,6 +563,101 @@ public class QwenPawEnvelopeMapper {
         data.put("name", name);
         data.put("output", output != null ? output : "");
         return data;
+    }
+
+    private Map<String, Object> outputToStateMessage(Map<String, Object> output) {
+        if (output == null || output.isEmpty()) return Map.of();
+        String type = string(output.get("type"));
+        String id = string(output.get("id"));
+        Object rawContent = output.get("content");
+        if (!(rawContent instanceof List<?> content)) return Map.of();
+        return switch (type) {
+            case "message" -> textStateMessage(id, content, false);
+            case "reasoning" -> textStateMessage(id, content, true);
+            case "plugin_call" -> toolCallStateMessage(id, content);
+            case "plugin_call_output" -> toolResultStateMessage(id, content);
+            default -> Map.of();
+        };
+    }
+
+    private Map<String, Object> textStateMessage(String id, List<?> content, boolean thinking) {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (Object item : content) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            String text = string(raw.get("text"));
+            if (text.isBlank()) continue;
+            Map<String, Object> block = new LinkedHashMap<>();
+            block.put("type", thinking ? "thinking" : "text");
+            block.put(thinking ? "thinking" : "text", text);
+            blocks.add(block);
+        }
+        if (blocks.isEmpty()) return Map.of();
+        return stateMessage(id, "assistant", "assistant", blocks);
+    }
+
+    private Map<String, Object> toolCallStateMessage(String id, List<?> content) {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (Object item : content) {
+            Map<String, Object> data = contentData(item);
+            if (data.isEmpty()) continue;
+            Map<String, Object> block = new LinkedHashMap<>();
+            block.put("type", "tool_call");
+            block.put("id", valueOrDefault(string(data.get("call_id")), id));
+            block.put("name", string(data.get("name")));
+            block.put("input", nonNull(data.get("arguments")));
+            block.put("state", "finished");
+            blocks.add(block);
+        }
+        if (blocks.isEmpty()) return Map.of();
+        return stateMessage(id, "assistant", "assistant", blocks);
+    }
+
+    private Map<String, Object> toolResultStateMessage(String id, List<?> content) {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (Object item : content) {
+            Map<String, Object> data = contentData(item);
+            if (data.isEmpty()) continue;
+            Map<String, Object> block = new LinkedHashMap<>();
+            block.put("type", "tool_result");
+            block.put("id", valueOrDefault(string(data.get("call_id")), id));
+            block.put("name", string(data.get("name")));
+            block.put("output", nonNull(data.get("output")));
+            block.put("state", "success");
+            blocks.add(block);
+        }
+        if (blocks.isEmpty()) return Map.of();
+        return stateMessage(id, "tool", "tool", blocks);
+    }
+
+    private Map<String, Object> contentData(Object item) {
+        if (!(item instanceof Map<?, ?> rawContent)) return Map.of();
+        Object rawData = rawContent.get("data");
+        if (!(rawData instanceof Map<?, ?> rawDataMap)) return Map.of();
+        Map<String, Object> data = new LinkedHashMap<>();
+        rawDataMap.forEach((key, value) -> data.put(String.valueOf(key), value));
+        return data;
+    }
+
+    private Map<String, Object> stateMessage(String id, String role, String name, List<Map<String, Object>> content) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", valueOrDefault(id, "msg_" + UUID.randomUUID().toString().replace("-", "")));
+        message.put("role", role);
+        message.put("name", name);
+        message.put("content", content);
+        message.put("metadata", Map.of());
+        return message;
+    }
+
+    private Object nonNull(Object value) {
+        return value != null ? value : "";
+    }
+
+    private String valueOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String string(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private String buildToolOutput(ToolState state) {

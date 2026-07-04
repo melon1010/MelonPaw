@@ -275,6 +275,7 @@ public class CronManager {
         private long delayMs;             // ONE_SHOT 类型使用
         private String agentId = "default";
         private String message;
+        private Map<String, Object> dispatch = Map.of();
         private boolean enabled = true;
         private long lastRun;
         private long nextRun;
@@ -288,6 +289,11 @@ public class CronManager {
             if (body.get("cron_expression") != null) job.setCronExpression((String) body.get("cron_expression"));
             if (body.get("agent_id") != null) job.setAgentId((String) body.get("agent_id"));
             if (body.get("message") != null) job.setMessage((String) body.get("message"));
+            if (body.get("dispatch") instanceof Map<?, ?> dispatch) {
+                Map<String, Object> copy = new java.util.LinkedHashMap<>();
+                dispatch.forEach((key, value) -> copy.put(String.valueOf(key), value));
+                job.setDispatch(copy);
+            }
             if (body.get("trigger_type") != null) {
                 job.setTriggerType(TriggerType.valueOf(((String) body.get("trigger_type")).toUpperCase()));
             }
@@ -313,6 +319,7 @@ public class CronManager {
             m.put("delay_ms", delayMs);
             m.put("agent_id", agentId);
             m.put("message", message);
+            m.put("dispatch", dispatch);
             m.put("enabled", enabled);
             m.put("last_run", lastRun);
             m.put("next_run", nextRun);
@@ -344,6 +351,9 @@ public class CronManager {
 
         public String getMessage() { return message; }
         public void setMessage(String message) { this.message = message; }
+
+        public Map<String, Object> getDispatch() { return dispatch; }
+        public void setDispatch(Map<String, Object> dispatch) { this.dispatch = dispatch != null ? dispatch : Map.of(); }
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }

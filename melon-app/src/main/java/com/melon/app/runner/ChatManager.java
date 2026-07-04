@@ -137,7 +137,10 @@ public class ChatManager {
                                                 Map<String, Object> turnUsage) {
         Path stateFile = findStateFile(agentId, sessionId);
         Map<String, Object> state = stateFile != null ? JsonUtils.load(stateFile, MAP_TYPE) : null;
-        if (state == null) state = new LinkedHashMap<>();
+        if (state == null || contextSize(state) == 0) {
+            Map<String, Object> previous = previousShadowState(agentId, channel, userId, sessionId);
+            state = previous.isEmpty() ? new LinkedHashMap<>() : previous;
+        }
         mergeFrontendContext(state, prependContext);
         injectTurnUsage(state, turnUsage);
         state = repairCompactedStateFromLog(agentId, sessionId, state, prependContext, turnUsage);
@@ -151,6 +154,15 @@ public class ChatManager {
         if (!Files.isRegularFile(file)) return Map.of();
         Map<String, Object> raw = JsonUtils.load(file, MAP_TYPE);
         return raw != null ? raw : Map.of();
+    }
+
+    private Map<String, Object> previousShadowState(String agentId, String channel, String userId, String sessionId) {
+        Map<String, Object> shadow = loadSessionShadow(agentId, channel, userId, sessionId);
+        Object agentRaw = shadow.get("agent");
+        if (!(agentRaw instanceof Map<?, ?> agentMap)) return Map.of();
+        Object stateRaw = asMap(agentMap).get("state");
+        if (!(stateRaw instanceof Map<?, ?> stateMap)) return Map.of();
+        return asMap(stateMap);
     }
 
     private List<ChatSpec> load(String agentId) {

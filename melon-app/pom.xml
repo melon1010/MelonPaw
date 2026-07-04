@@ -29,6 +29,10 @@
         </dependency>
         <dependency>
             <groupId>com.melon</groupId>
+            <artifactId>melon-channels</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.melon</groupId>
             <artifactId>melon-plugin-api</artifactId>
         </dependency>
         <dependency>

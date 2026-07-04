@@ -2,6 +2,7 @@ package com.melon.app.controller;
 
 import com.melon.app.cron.CronExecutor;
 import com.melon.app.cron.CronManager;
+import com.melon.channels.ChannelConfigService;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.cron.CronJobStore;
 import org.springframework.http.ResponseEntity;
@@ -27,11 +28,16 @@ public class CronCompatController {
     private final ConfigManager configManager;
     private final CronManager cronManager;
     private final CronExecutor cronExecutor;
+    private final ChannelConfigService channelConfigService;
 
-    public CronCompatController(ConfigManager configManager, CronManager cronManager, CronExecutor cronExecutor) {
+    public CronCompatController(ConfigManager configManager,
+                                CronManager cronManager,
+                                CronExecutor cronExecutor,
+                                ChannelConfigService channelConfigService) {
         this.configManager = configManager;
         this.cronManager = cronManager;
         this.cronExecutor = cronExecutor;
+        this.channelConfigService = channelConfigService;
     }
 
     @GetMapping("/jobs")
@@ -136,7 +142,7 @@ public class CronCompatController {
             String jobId = String.valueOf(job.get("id"));
             String taskId = "manual-" + jobId + "-" + System.currentTimeMillis();
             markRun(agentId, id, runAt, "manual", "running", null);
-            cronExecutor.injectMessage(AgentRequestSupport.agentId(agentId), prompt, taskId,
+            cronExecutor.injectDispatchedMessage(AgentRequestSupport.agentId(agentId), prompt, taskId, dispatch(job),
                     reply -> markRun(agentId, id, runAt, "manual", "success", null),
                     err -> markRun(agentId, id, runAt, "manual", "error", err.getMessage()));
             return ResponseEntity.ok(Map.of(
@@ -172,12 +178,32 @@ public class CronCompatController {
     }
 
     @GetMapping("/dispatch-targets")
-    public Mono<ResponseEntity<?>> dispatchTargets() {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "channels", List.of(),
-                "items", List.of(),
-                "enabled", false
-        )));
+    public Mono<ResponseEntity<?>> dispatchTargets(@RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId) {
+        return Mono.fromCallable(() -> {
+            Map<String, Map<String, Object>> channels = channelConfigService.list(AgentRequestSupport.agentId(agentId));
+            List<String> enabled = channels.entrySet().stream()
+                    .filter(entry -> booleanValue(entry.getValue().get("enabled"), false))
+                    .map(Map.Entry::getKey)
+                    .toList();
+            List<Map<String, Object>> items = new ArrayList<>();
+            for (Map<String, Object> job : loadJobs(agentId)) {
+                Object dispatch = job.get("dispatch");
+                if (!(dispatch instanceof Map<?, ?> dispatchMap)) continue;
+                Object target = dispatchMap.get("target");
+                if (!(target instanceof Map<?, ?> targetMap)) continue;
+                String channel = stringValue(dispatchMap.get("channel"), "console");
+                items.add(Map.of(
+                        "channel", channel,
+                        "user_id", stringValue(targetMap.get("user_id"), "default"),
+                        "session_id", stringValue(targetMap.get("session_id"), "cron_job")
+                ));
+            }
+            return ResponseEntity.ok(Map.of(
+                    "channels", enabled,
+                    "items", items,
+                    "enabled", true
+            ));
+        });
     }
 
     private Mono<ResponseEntity<?>> setEnabled(String agentId, String id, boolean enabled) {
@@ -244,6 +270,7 @@ public class CronCompatController {
         cronJob.setAgentId(AgentRequestSupport.agentId(stringValue(job.get("agent_id"), agentId)));
         cronJob.setMessage(promptValue(job));
         cronJob.setEnabled(booleanValue(job.getOrDefault("enabled", true), true));
+        cronJob.setDispatch(dispatch(job));
         Object schedule = job.get("schedule");
         if (schedule instanceof Map<?, ?> map && "once".equalsIgnoreCase(String.valueOf(map.get("type")))) {
             cronJob.setTriggerType(CronManager.TriggerType.ONE_SHOT);
@@ -257,6 +284,17 @@ public class CronCompatController {
 
     private String runtimeId(String agentId, String jobId) {
         return AgentRequestSupport.agentId(agentId) + ":" + jobId;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> dispatch(Map<String, Object> job) {
+        Object raw = job.get("dispatch");
+        if (raw instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, value) -> copy.put(String.valueOf(key), value));
+            return copy;
+        }
+        return Map.of("type", "channel", "channel", "console", "target", Map.of("user_id", "default", "session_id", "cron_job"), "mode", "final", "meta", Map.of());
     }
 
     private String normalizeCronExpression(String cron) {

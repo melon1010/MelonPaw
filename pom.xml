@@ -24,6 +24,7 @@
         <module>melon-core</module>
         <module>melon-tools</module>
         <module>melon-coding-mode</module>
+        <module>melon-channels</module>
         <module>melon-app</module>
     </modules>
 
@@ -36,6 +37,8 @@
         <picocli.version>4.7.6</picocli.version>
         <playwright.version>1.45.0</playwright.version>
         <lsp4j.version>0.23.0</lsp4j.version>
+        <paho.version>1.2.5</paho.version>
+        <zxing.version>3.5.3</zxing.version>
     </properties>
 
     <dependencyManagement>
@@ -58,6 +61,11 @@
             <dependency>
                 <groupId>com.melon</groupId>
                 <artifactId>melon-coding-mode</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.melon</groupId>
+                <artifactId>melon-channels</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -89,6 +97,21 @@
                 <groupId>org.eclipse.lsp4j</groupId>
                 <artifactId>org.eclipse.lsp4j</artifactId>
                 <version>${lsp4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.paho</groupId>
+                <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+                <version>${paho.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.zxing</groupId>
+                <artifactId>core</artifactId>
+                <version>${zxing.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.zxing</groupId>
+                <artifactId>javase</artifactId>
+                <version>${zxing.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

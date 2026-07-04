@@ -76,15 +76,26 @@ public class AgentRunner {
 
     private RuntimeContext buildContext(String userId, String sessionId, Map<String, Object> envInfo) {
         String sid = sessionId != null ? sessionId : "default";
+        String rootSessionId = sid;
+        if (envInfo != null && envInfo.get("root_session_id") != null) {
+            rootSessionId = String.valueOf(envInfo.get("root_session_id"));
+        }
         RuntimeContext.Builder builder = RuntimeContext.builder()
-                .sessionId(sid);
+                .sessionId(sid)
+                .userId(userId);
 
         builder.put("session_id", sid);
+        builder.put("root_session_id", rootSessionId);
         if (userId != null) {
             builder.put("user_id", userId);
         }
 
         if (envInfo != null) {
+            envInfo.forEach((key, value) -> {
+                if (key != null && value != null) {
+                    builder.put(key, value);
+                }
+            });
             if (envInfo.get("agent_id") != null) {
                 builder.put("agent_id", envInfo.get("agent_id"));
             }
@@ -117,7 +128,7 @@ public class AgentRunner {
                 .<AgentEvent>handle((event, sink) -> {
                     if (event instanceof RequireUserConfirmEvent confirm) {
                         List<Map<String, Object>> requests = confirm.getToolCalls().stream()
-                                .map(toolCall -> normalizeApproval(agentId, sid, toolCall))
+                                .map(toolCall -> normalizeApproval(agentId, sid, ctx, toolCall))
                                 .toList();
                         pending.set(approvalService.openPendingApproval(sid, confirm.getToolCalls(), requests));
                         sink.next(event);
@@ -145,15 +156,19 @@ public class AgentRunner {
         return type == AgentEventType.REQUEST_STOP || type == AgentEventType.AGENT_END;
     }
 
-    private Map<String, Object> normalizeApproval(String agentId, String sessionId, ToolUseBlock toolCall) {
+    private Map<String, Object> normalizeApproval(String agentId, String sessionId, RuntimeContext ctx, ToolUseBlock toolCall) {
         String sid = sessionId != null ? sessionId : "default";
+        Object rootRaw = ctx != null ? ctx.get("root_session_id") : null;
+        String rootSid = rootRaw != null && !String.valueOf(rootRaw).isBlank() ? String.valueOf(rootRaw) : sid;
+        Object ownerRaw = ctx != null ? ctx.get("root_agent_id") : null;
         String aid = stringValue(agentId, "default");
+        String ownerAid = ownerRaw != null && !String.valueOf(ownerRaw).isBlank() ? String.valueOf(ownerRaw) : aid;
         Map<String, Object> approval = new java.util.LinkedHashMap<>();
         approval.put("request_id", toolCall.getId());
         approval.put("session_id", sid);
-        approval.put("root_session_id", sid);
+        approval.put("root_session_id", rootSid);
         approval.put("agent_id", aid);
-        approval.put("owner_agent_id", aid);
+        approval.put("owner_agent_id", ownerAid);
         approval.put("tool_name", toolCall.getName());
         approval.put("tool_display_name", toolCall.getName());
         approval.put("tool_source", "agentscope");
