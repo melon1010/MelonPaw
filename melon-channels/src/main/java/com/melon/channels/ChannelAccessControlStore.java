@@ -1,6 +1,7 @@
 package com.melon.channels;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 
@@ -24,15 +25,20 @@ public class ChannelAccessControlStore {
 
     public Map<String, Object> all(String agentId) {
         Map<String, Object> data = load(agentId);
-        for (String channel : ChannelTypes.BUILTIN) {
-            data.putIfAbsent(channel, emptyAcl());
+        Map<String, Object> result = new LinkedHashMap<>();
+        data.forEach((channel, raw) -> {
+            if (raw instanceof Map<?, ?> acl && hasAclData(acl)) {
+                result.put(channel, copy(acl));
+            }
+        });
+        for (String channel : accessControlEnabledChannels(agentId)) {
+            result.putIfAbsent(channel, channelAcl(data, channel));
         }
-        save(agentId, data);
-        return data;
+        return result;
     }
 
     public Map<String, Object> channel(String agentId, String channel) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         Object raw = data.get(channel);
         return raw instanceof Map<?, ?> map ? copy(map) : emptyAcl();
     }
@@ -51,7 +57,7 @@ public class ChannelAccessControlStore {
     }
 
     public Map<String, Object> addUsers(String agentId, String listName, List<Map<String, Object>> entries) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         for (Map<String, Object> entry : entries != null ? entries : List.<Map<String, Object>>of()) {
             String channel = stringValue(entry.get("channel"), "console");
             String userId = stringValue(entry.get("user_id"));
@@ -66,7 +72,7 @@ public class ChannelAccessControlStore {
     }
 
     public Map<String, Object> removeUsers(String agentId, String listName, List<Map<String, Object>> entries) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         for (Map<String, Object> entry : entries != null ? entries : List.<Map<String, Object>>of()) {
             String channel = stringValue(entry.get("channel"), "console");
             String userId = stringValue(entry.get("user_id"));
@@ -78,7 +84,7 @@ public class ChannelAccessControlStore {
     }
 
     public Map<String, Object> updateRemark(String agentId, String channel, String userId, String remark) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         Map<String, Object> acl = acl(data, channel);
         for (String list : List.of("whitelist", "blacklist")) {
             Object raw = users(acl, list).get(userId);
@@ -94,7 +100,7 @@ public class ChannelAccessControlStore {
     }
 
     public Map<String, Object> updateUsername(String agentId, String channel, String userId, String username) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         Map<String, Object> acl = acl(data, channel);
         for (String list : List.of("whitelist", "blacklist")) {
             Object raw = users(acl, list).get(userId);
@@ -110,7 +116,7 @@ public class ChannelAccessControlStore {
     }
 
     public void addPending(String agentId, ChannelInboundMessage message) {
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         Map<String, Object> acl = acl(data, message.getChannel());
         List<Object> pending = pending(acl);
         boolean exists = pending.stream()
@@ -139,6 +145,11 @@ public class ChannelAccessControlStore {
         boolean gate = group
                 ? Boolean.TRUE.equals(channelConfig.get("access_control_group"))
                 : Boolean.TRUE.equals(channelConfig.get("access_control_dm"));
+        if (!gate) {
+            gate = group
+                    ? "allowlist".equals(stringValue(channelConfig.get("group_policy")))
+                    : "allowlist".equals(stringValue(channelConfig.get("dm_policy")));
+        }
         return !gate || users(acl, "whitelist").containsKey(userId);
     }
 
@@ -157,15 +168,23 @@ public class ChannelAccessControlStore {
     }
 
     public Map<String, Object> pendingAction(String agentId, String action, List<Map<String, Object>> entries) {
-        if ("approve".equals(action)) return addUsers(agentId, "whitelist", entries);
-        if ("deny".equals(action)) return addUsers(agentId, "blacklist", entries);
-        Map<String, Object> data = all(agentId);
+        Map<String, Object> data = load(agentId);
         for (Map<String, Object> entry : entries != null ? entries : List.<Map<String, Object>>of()) {
-            removePending(acl(data, stringValue(entry.get("channel"), "console")),
-                    stringValue(entry.get("channel"), "console"), stringValue(entry.get("user_id")));
+            String channel = stringValue(entry.get("channel"), "console");
+            String userId = stringValue(entry.get("user_id"));
+            if (userId.isBlank()) continue;
+            Map<String, Object> acl = acl(data, channel);
+            if ("approve".equals(action)) {
+                users(acl, "whitelist").put(userId, pendingUserInfo(acl, channel, userId, entry));
+                users(acl, "blacklist").remove(userId);
+            } else if ("deny".equals(action)) {
+                users(acl, "blacklist").put(userId, pendingUserInfo(acl, channel, userId, entry));
+                users(acl, "whitelist").remove(userId);
+            }
+            removePending(acl, channel, userId);
         }
         save(agentId, data);
-        return data;
+        return all(agentId);
     }
 
     private Map<String, Object> load(String agentId) {
@@ -186,6 +205,11 @@ public class ChannelAccessControlStore {
         Map<String, Object> acl = raw instanceof Map<?, ?> map ? copy(map) : emptyAcl();
         data.put(channel, acl);
         return acl;
+    }
+
+    private Map<String, Object> channelAcl(Map<String, Object> data, String channel) {
+        Object raw = data.get(channel);
+        return raw instanceof Map<?, ?> map ? copy(map) : emptyAcl();
     }
 
     @SuppressWarnings("unchecked")
@@ -221,6 +245,24 @@ public class ChannelAccessControlStore {
                 && channel.equals(stringValue(map.get("channel"), channel)));
     }
 
+    private Map<String, Object> pendingUserInfo(Map<String, Object> acl, String channel, String userId, Map<String, Object> entry) {
+        Map<String, Object> info = userInfo(entry);
+        for (Object item : pending(acl)) {
+            if (item instanceof Map<?, ?> map
+                    && userId.equals(stringValue(map.get("user_id")))
+                    && channel.equals(stringValue(map.get("channel"), channel))) {
+                if (stringValue(info.get("remark")).isBlank()) {
+                    info.put("remark", stringValue(map.get("remark")));
+                }
+                if (stringValue(info.get("username")).isBlank()) {
+                    info.put("username", stringValue(map.get("username")));
+                }
+                break;
+            }
+        }
+        return info;
+    }
+
     private void updatePendingField(Map<String, Object> acl, String userId, String field, String value) {
         List<Object> items = pending(acl);
         for (int i = 0; i < items.size(); i++) {
@@ -238,6 +280,35 @@ public class ChannelAccessControlStore {
         info.put("remark", stringValue(entry.get("remark")));
         info.put("username", stringValue(entry.get("username")));
         return info;
+    }
+
+    private boolean hasAclData(Map<?, ?> acl) {
+        return nonEmptyMap(acl.get("whitelist"))
+                || nonEmptyMap(acl.get("blacklist"))
+                || nonEmptyList(acl.get("pending"));
+    }
+
+    private boolean nonEmptyMap(Object value) {
+        return value instanceof Map<?, ?> map && !map.isEmpty();
+    }
+
+    private boolean nonEmptyList(Object value) {
+        return value instanceof List<?> list && !list.isEmpty();
+    }
+
+    private List<String> accessControlEnabledChannels(String agentId) {
+        AgentConfig agent = configManager.getConfig().getAgents().get(agentId);
+        if (agent == null || agent.getChannels() == null) return List.of();
+        List<String> result = new ArrayList<>();
+        agent.getChannels().forEach((channel, config) -> {
+            if (config == null) return;
+            boolean enabled = Boolean.TRUE.equals(config.get("access_control_dm"))
+                    || Boolean.TRUE.equals(config.get("access_control_group"))
+                    || "allowlist".equals(stringValue(config.get("dm_policy")))
+                    || "allowlist".equals(stringValue(config.get("group_policy")));
+            if (enabled) result.add(channel);
+        });
+        return result;
     }
 
     private Map<String, Object> emptyAcl() {

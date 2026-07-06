@@ -4,6 +4,7 @@ import com.melon.core.config.ConfigManager;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -18,8 +19,8 @@ public final class ChannelAccessControlSelfCheck {
         configManager.setHomeDir(home.toString());
         ChannelAccessControlStore store = new ChannelAccessControlStore(configManager);
 
-        if (!store.all("default").containsKey("console")) {
-            throw new AssertionError("all() should initialize builtin channels");
+        if (!store.all("default").isEmpty()) {
+            throw new AssertionError("all() should not return empty builtin channels");
         }
 
         ChannelInboundMessage inbound = new ChannelInboundMessage();
@@ -50,10 +51,23 @@ public final class ChannelAccessControlSelfCheck {
             throw new AssertionError("whitelisted user should pass allowlist policy");
         }
 
+        Map<String, Object> visible = store.all("default");
+        if (!visible.containsKey("slack") || visible.containsKey("console")) {
+            throw new AssertionError("all() should return ACL data channels only: " + visible.keySet());
+        }
+
         store.updateRemark("default", "slack", "u1", "trusted");
         store.updateUsername("default", "slack", "u1", "alice-new");
         if (!store.channel("default", "slack").toString().contains("alice-new")) {
             throw new AssertionError("user metadata update was not persisted");
+        }
+
+        var agent = configManager.getConfig().getAgents().get("default");
+        Map<String, Map<String, Object>> channels = new LinkedHashMap<>();
+        channels.put("wechat", Map.of("access_control_dm", true));
+        agent.setChannels(channels);
+        if (!store.all("default").containsKey("wechat")) {
+            throw new AssertionError("all() should include channels with access control enabled");
         }
 
         store.addUsers("default", "blacklist", List.of(Map.of("channel", "slack", "user_id", "u1")));

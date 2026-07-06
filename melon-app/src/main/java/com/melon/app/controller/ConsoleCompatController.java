@@ -8,6 +8,7 @@ import com.melon.app.runner.ChatSpec;
 import com.melon.app.runner.CommandDispatcher;
 import com.melon.app.runner.QwenPawEnvelopeMapper;
 import com.melon.app.service.ApprovalService;
+import com.melon.app.service.InboxStore;
 import com.melon.app.service.SkillService;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.agent.CommandHandler;
@@ -57,10 +58,12 @@ public class ConsoleCompatController {
     private final CommandDispatcher commandDispatcher;
     private final SkillService skillService;
     private final MultiAgentManager multiAgentManager;
+    private final InboxStore inboxStore;
 
     public ConsoleCompatController(AgentRunner agentRunner, ChatManager chatManager, ApprovalService approvalService,
                                    ConfigManager configManager, CommandDispatcher commandDispatcher,
-                                   SkillService skillService, MultiAgentManager multiAgentManager) {
+                                   SkillService skillService, MultiAgentManager multiAgentManager,
+                                   InboxStore inboxStore) {
         this.agentRunner = agentRunner;
         this.chatManager = chatManager;
         this.approvalService = approvalService;
@@ -68,6 +71,7 @@ public class ConsoleCompatController {
         this.commandDispatcher = commandDispatcher;
         this.skillService = skillService;
         this.multiAgentManager = multiAgentManager;
+        this.inboxStore = inboxStore;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -188,29 +192,42 @@ public class ConsoleCompatController {
     }
 
     @GetMapping("/inbox/events")
-    public Mono<ResponseEntity<?>> inboxEvents() {
-        return Mono.just(ResponseEntity.ok(Map.of("events", List.of())));
+    public Mono<ResponseEntity<?>> inboxEvents(@RequestParam(defaultValue = "50") int limit,
+                                               @RequestParam(defaultValue = "0") int offset,
+                                               @RequestParam(value = "source_type", required = false) String sourceType,
+                                               @RequestParam(required = false) String status,
+                                               @RequestParam(value = "agent_id", required = false) String agentId,
+                                               @RequestParam(value = "unread_only", defaultValue = "false") boolean unreadOnly) {
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "events",
+                inboxStore.listEvents(Math.min(Math.max(limit, 1), 500), Math.max(offset, 0),
+                        sourceType, status, agentId, unreadOnly)
+        )));
     }
 
     @PostMapping("/inbox/read")
-    public Mono<ResponseEntity<?>> markInboxRead() {
-        return Mono.just(ResponseEntity.ok(Map.of("updated", 0)));
+    public Mono<ResponseEntity<?>> markInboxRead(@RequestBody(required = false) Map<String, Object> body) {
+        int updated = body != null && Boolean.TRUE.equals(body.get("all"))
+                ? inboxStore.markAllRead()
+                : inboxStore.markRead(stringList(body != null ? body.get("event_ids") : null));
+        return Mono.just(ResponseEntity.ok(Map.of("updated", updated)));
     }
 
     @DeleteMapping("/inbox/events/{eventId}")
     public Mono<ResponseEntity<?>> deleteInboxEvent(@PathVariable String eventId) {
-        return Mono.just(ResponseEntity.ok(Map.of("deleted", true, "trace_deleted", false, "run_id", "")));
+        Map<String, Object> result = inboxStore.deleteEvent(eventId);
+        if (!Boolean.TRUE.equals(result.get("deleted"))) {
+            return Mono.just(ResponseEntity.status(404).body(Map.of("detail", "event not found")));
+        }
+        return Mono.just(ResponseEntity.ok(result));
     }
 
     @GetMapping("/inbox/traces/{runId}")
     public Mono<ResponseEntity<?>> inboxTrace(@PathVariable String runId) {
-        Map<String, Object> trace = new LinkedHashMap<>();
-        trace.put("run_id", runId);
-        trace.put("created_at", System.currentTimeMillis() / 1000.0);
-        trace.put("completed_at", null);
-        trace.put("status", "not_found");
-        trace.put("meta", Map.of());
-        trace.put("events", List.of());
+        Map<String, Object> trace = inboxStore.getTrace(runId);
+        if ("not_found".equals(trace.get("status"))) {
+            return Mono.just(ResponseEntity.status(404).body(Map.of("detail", "trace not found")));
+        }
         return Mono.just(ResponseEntity.ok(trace));
     }
 
@@ -536,6 +553,15 @@ public class ConsoleCompatController {
 
     private boolean isMediaType(String type) {
         return "file".equals(type) || "image".equals(type) || "audio".equals(type) || "video".equals(type);
+    }
+
+    private List<String> stringList(Object raw) {
+        if (!(raw instanceof List<?> list)) return List.of();
+        List<String> result = new ArrayList<>();
+        for (Object item : list) {
+            if (item != null) result.add(String.valueOf(item));
+        }
+        return result;
     }
 
     private String errorJson(Throwable e) {

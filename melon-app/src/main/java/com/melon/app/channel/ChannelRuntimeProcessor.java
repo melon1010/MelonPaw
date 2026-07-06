@@ -78,10 +78,10 @@ public class ChannelRuntimeProcessor {
                     .blockLast();
             envelope.finish();
             String reply = messageRenderer.render(envelope.outputMessagesSnapshot(), channelConfig);
-            return outbound(inbound, reply.isBlank() ? envelope.visibleAssistantText() : reply);
+            return outbound(inbound, reply.isBlank() ? envelope.visibleAssistantText() : reply, envelope.visibleAssistantText());
         } catch (Exception e) {
             envelope.error(e);
-            return outbound(inbound, e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+            return outbound(inbound, e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(), "");
         } finally {
             chatManager.setStatus(agentId, chat.getId(), "idle");
             chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId,
@@ -89,7 +89,7 @@ public class ChannelRuntimeProcessor {
         }
     }
 
-    private ChannelOutboundMessage outbound(ChannelInboundMessage inbound, String text) {
+    private ChannelOutboundMessage outbound(ChannelInboundMessage inbound, String text, String visibleText) {
         ChannelOutboundMessage out = new ChannelOutboundMessage();
         out.setAgentId(inbound.getAgentId());
         out.setChannel(inbound.getChannel());
@@ -97,7 +97,7 @@ public class ChannelRuntimeProcessor {
         out.setSessionId(inbound.getSessionId());
         out.setTo(inbound.getReplyTo());
         out.setText(text != null ? text : "");
-        out.setMeta(Map.of("channel_meta", inbound.getChannelMeta()));
+        out.setMeta(Map.of("channel_meta", inbound.getChannelMeta(), "visible_text", visibleText != null ? visibleText : ""));
         return out;
     }
 

@@ -276,6 +276,9 @@ public class CronManager {
         private String agentId = "default";
         private String message;
         private Map<String, Object> dispatch = Map.of();
+        private String sourceId;
+        private boolean saveResultToInbox = true;
+        private String taskType = "agent";
         private boolean enabled = true;
         private long lastRun;
         private long nextRun;
@@ -289,6 +292,11 @@ public class CronManager {
             if (body.get("cron_expression") != null) job.setCronExpression((String) body.get("cron_expression"));
             if (body.get("agent_id") != null) job.setAgentId((String) body.get("agent_id"));
             if (body.get("message") != null) job.setMessage((String) body.get("message"));
+            if (body.get("source_id") != null) job.setSourceId(String.valueOf(body.get("source_id")));
+            if (body.get("task_type") != null) job.setTaskType(String.valueOf(body.get("task_type")));
+            if (body.get("save_result_to_inbox") != null) {
+                job.setSaveResultToInbox(Boolean.parseBoolean(String.valueOf(body.get("save_result_to_inbox"))));
+            }
             if (body.get("dispatch") instanceof Map<?, ?> dispatch) {
                 Map<String, Object> copy = new java.util.LinkedHashMap<>();
                 dispatch.forEach((key, value) -> copy.put(String.valueOf(key), value));
@@ -320,6 +328,9 @@ public class CronManager {
             m.put("agent_id", agentId);
             m.put("message", message);
             m.put("dispatch", dispatch);
+            m.put("source_id", sourceId);
+            m.put("save_result_to_inbox", saveResultToInbox);
+            m.put("task_type", taskType);
             m.put("enabled", enabled);
             m.put("last_run", lastRun);
             m.put("next_run", nextRun);
@@ -354,6 +365,15 @@ public class CronManager {
 
         public Map<String, Object> getDispatch() { return dispatch; }
         public void setDispatch(Map<String, Object> dispatch) { this.dispatch = dispatch != null ? dispatch : Map.of(); }
+
+        public String getSourceId() { return sourceId; }
+        public void setSourceId(String sourceId) { this.sourceId = sourceId; }
+
+        public boolean isSaveResultToInbox() { return saveResultToInbox; }
+        public void setSaveResultToInbox(boolean saveResultToInbox) { this.saveResultToInbox = saveResultToInbox; }
+
+        public String getTaskType() { return taskType; }
+        public void setTaskType(String taskType) { this.taskType = taskType; }
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }

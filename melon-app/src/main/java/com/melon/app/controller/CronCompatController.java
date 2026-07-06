@@ -2,6 +2,7 @@ package com.melon.app.controller;
 
 import com.melon.app.cron.CronExecutor;
 import com.melon.app.cron.CronManager;
+import com.melon.app.service.InboxStore;
 import com.melon.channels.ChannelConfigService;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.cron.CronJobStore;
@@ -29,15 +30,18 @@ public class CronCompatController {
     private final CronManager cronManager;
     private final CronExecutor cronExecutor;
     private final ChannelConfigService channelConfigService;
+    private final InboxStore inboxStore;
 
     public CronCompatController(ConfigManager configManager,
                                 CronManager cronManager,
                                 CronExecutor cronExecutor,
-                                ChannelConfigService channelConfigService) {
+                                ChannelConfigService channelConfigService,
+                                InboxStore inboxStore) {
         this.configManager = configManager;
         this.cronManager = cronManager;
         this.cronExecutor = cronExecutor;
         this.channelConfigService = channelConfigService;
+        this.inboxStore = inboxStore;
     }
 
     @GetMapping("/jobs")
@@ -141,10 +145,20 @@ public class CronCompatController {
             String runAt = Instant.now().toString();
             String jobId = String.valueOf(job.get("id"));
             String taskId = "manual-" + jobId + "-" + System.currentTimeMillis();
+            String runId = "cron-" + AgentRequestSupport.agentId(agentId) + ":" + taskId;
             markRun(agentId, id, runAt, "manual", "running", null);
-            cronExecutor.injectDispatchedMessage(AgentRequestSupport.agentId(agentId), prompt, taskId, dispatch(job),
-                    reply -> markRun(agentId, id, runAt, "manual", "success", null),
-                    err -> markRun(agentId, id, runAt, "manual", "error", err.getMessage()));
+            if (booleanValue(job.getOrDefault("save_result_to_inbox", true), true)) {
+                inboxStore.createTrace(runId, Map.of("job_id", jobId, "job_name", stringValue(job.get("name"), "Cron job")));
+            }
+            cronExecutor.injectDispatchedMessage(AgentRequestSupport.agentId(agentId), prompt, runId, dispatch(job),
+                    reply -> {
+                        markRun(agentId, id, runAt, "manual", "success", null);
+                        appendManualInboxEvent(agentId, job, runId, cleanText(reply), null);
+                    },
+                    err -> {
+                        markRun(agentId, id, runAt, "manual", "error", err.getMessage());
+                        appendManualInboxEvent(agentId, job, runId, "", err);
+                    });
             return ResponseEntity.ok(Map.of(
                     "started", true,
                     "job_id", jobId,
@@ -266,10 +280,13 @@ public class CronCompatController {
     private CronManager.CronJob toCronJob(String agentId, Map<String, Object> job) {
         CronManager.CronJob cronJob = new CronManager.CronJob();
         cronJob.setId(runtimeId(agentId, String.valueOf(job.get("id"))));
+        cronJob.setSourceId(String.valueOf(job.get("id")));
         cronJob.setName(stringValue(job.get("name"), "Cron job"));
         cronJob.setAgentId(AgentRequestSupport.agentId(stringValue(job.get("agent_id"), agentId)));
         cronJob.setMessage(promptValue(job));
         cronJob.setEnabled(booleanValue(job.getOrDefault("enabled", true), true));
+        cronJob.setSaveResultToInbox(booleanValue(job.getOrDefault("save_result_to_inbox", true), true));
+        cronJob.setTaskType(stringValue(job.get("task_type"), "agent"));
         cronJob.setDispatch(dispatch(job));
         Object schedule = job.get("schedule");
         if (schedule instanceof Map<?, ?> map && "once".equalsIgnoreCase(String.valueOf(map.get("type")))) {
@@ -421,6 +438,40 @@ public class CronCompatController {
 
     private Map<String, Object> findJob(String agentId, String id) {
         return CronJobStore.find(workspaceDir(agentId), id);
+    }
+
+    private void appendManualInboxEvent(String agentId, Map<String, Object> job, String runId, String text, Throwable err) {
+        if (!booleanValue(job.getOrDefault("save_result_to_inbox", true), true)) {
+            return;
+        }
+        boolean ok = err == null;
+        inboxStore.appendTraceText(runId, "assistant", ok ? text : err.getMessage());
+        inboxStore.finalizeTrace(runId, ok ? "success" : "error", ok ? null : err.getMessage());
+        String jobId = String.valueOf(job.get("id"));
+        String name = stringValue(job.get("name"), "Cron job");
+        inboxStore.appendEvent(
+                AgentRequestSupport.agentId(agentId),
+                "cron",
+                jobId,
+                ok ? "cron_result" : "cron_error",
+                ok ? "success" : "error",
+                ok ? "info" : "error",
+                (ok ? "Cron result: " : "Cron failed: ") + name,
+                preview(ok ? text : err.getMessage(), ok ? "Agent cron task finished successfully." : "Cron task failed."),
+                Map.of("job_id", jobId, "job_name", name, "task_type", stringValue(job.get("task_type"), "agent"), "trigger", "manual", "run_id", runId)
+        );
+    }
+
+    private String preview(String value, String fallback) {
+        String text = stringValue(value, fallback).trim();
+        return text.length() > 4000 ? text.substring(0, 4000) : text;
+    }
+
+    private String cleanText(com.melon.channels.ChannelOutboundMessage out) {
+        if (out == null) return "";
+        Object visible = out.getMeta().get("visible_text");
+        String text = visible != null ? String.valueOf(visible) : "";
+        return text.isBlank() ? out.getText() : text;
     }
 
 }

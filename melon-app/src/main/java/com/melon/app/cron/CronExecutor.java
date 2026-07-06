@@ -4,6 +4,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
+import com.melon.app.service.InboxStore;
 import com.melon.channels.ChannelAddress;
 import com.melon.channels.ChannelInboundMessage;
 import com.melon.channels.ChannelManager;
@@ -31,11 +32,14 @@ public class CronExecutor {
     private final AgentRunner agentRunner;
     private final ChatManager chatManager;
     private final ChannelManager channelManager;
+    private final InboxStore inboxStore;
 
-    public CronExecutor(AgentRunner agentRunner, ChatManager chatManager, ChannelManager channelManager) {
+    public CronExecutor(AgentRunner agentRunner, ChatManager chatManager, ChannelManager channelManager,
+                        InboxStore inboxStore) {
         this.agentRunner = agentRunner;
         this.chatManager = chatManager;
         this.channelManager = channelManager;
+        this.inboxStore = inboxStore;
     }
 
     /**
@@ -51,10 +55,18 @@ public class CronExecutor {
             return;
         }
         log.info("Executing cron job: id={}, agent={}, messageLen={}", job.getId(), agentId, message.length());
+        String runId = "cron-" + job.getId() + "-" + System.currentTimeMillis();
+        if (job.isSaveResultToInbox()) {
+            inboxStore.createTrace(runId, Map.of("job_id", sourceId(job), "job_name", name(job)));
+        }
         if (job.getDispatch() != null && !job.getDispatch().isEmpty()) {
-            injectDispatchedMessage(agentId, message, job.getId(), job.getDispatch(), ignored -> {}, err -> {});
+            injectDispatchedMessage(agentId, message, runId, job.getDispatch(), out -> {
+                appendTraceAndCronEvent(job, runId, cleanText(out), null);
+            }, err -> appendTraceAndCronEvent(job, runId, "", err));
         } else {
-            injectMessage(agentId, message, job.getId());
+            injectMessage(agentId, message, runId, reply -> {
+                appendTraceAndCronEvent(job, runId, reply != null ? reply.getTextContent() : "", null);
+            }, err -> appendTraceAndCronEvent(job, runId, "", err));
         }
     }
 
@@ -123,11 +135,13 @@ public class CronExecutor {
                             taskId, reply != null && reply.getTextContent() != null ? reply.getTextContent().length() : 0))
                     .doOnSuccess(reply -> {
                         chatManager.saveSessionShadowFromStateStore(agentId, ch, uid, sid);
+                        appendHeartbeatEvent(agentId, taskId, reply != null ? reply.getTextContent() : "", null);
                         onSuccess.accept(reply);
                     })
                     .doOnError(err -> log.error("Cron task {} failed", taskId, err))
                     .doOnError(err -> {
                         chatManager.saveSessionShadowFromStateStore(agentId, ch, uid, sid);
+                        appendHeartbeatEvent(agentId, taskId, "", err);
                         onError.accept(err);
                     })
                     .subscribe(); // 异步, 不阻塞
@@ -138,6 +152,82 @@ public class CronExecutor {
             log.info("Cron message for agent [{}]: {}", agentId, message);
             onError.accept(e);
         }
+    }
+
+    private void appendTraceAndCronEvent(CronManager.CronJob job, String runId, String text, Throwable err) {
+        if (!job.isSaveResultToInbox()) {
+            return;
+        }
+        if (err != null) {
+            inboxStore.appendTraceText(runId, "assistant", err.getMessage());
+            inboxStore.finalizeTrace(runId, "error", err.getMessage());
+        } else {
+            inboxStore.appendTraceText(runId, "assistant", text);
+            inboxStore.finalizeTrace(runId, "success", null);
+        }
+        boolean ok = err == null;
+        inboxStore.appendEvent(
+                job.getAgentId(),
+                "cron",
+                sourceId(job),
+                ok ? "cron_result" : "cron_error",
+                ok ? "success" : "error",
+                ok ? "info" : "error",
+                (ok ? "Cron result: " : "Cron failed: ") + name(job),
+                ok ? preview(text, "Agent cron task finished successfully.") : preview(err.getMessage(), "Cron task failed."),
+                Map.of("job_id", sourceId(job), "job_name", name(job), "task_type", value(job.getTaskType(), "agent"), "run_id", runId)
+        );
+    }
+
+    private void appendHeartbeatEvent(String agentId, String runId, String text, Throwable err) {
+        if (runId == null || !runId.startsWith("heartbeat-")) {
+            return;
+        }
+        if (err != null) {
+            inboxStore.createTrace(runId, Map.of("source", "heartbeat"));
+            inboxStore.appendTraceText(runId, "assistant", err.getMessage());
+            inboxStore.finalizeTrace(runId, "error", err.getMessage());
+        } else {
+            inboxStore.createTrace(runId, Map.of("source", "heartbeat"));
+            inboxStore.appendTraceText(runId, "assistant", text);
+            inboxStore.finalizeTrace(runId, "success", null);
+        }
+        boolean ok = err == null;
+        inboxStore.appendEvent(
+                agentId,
+                "heartbeat",
+                "heartbeat",
+                ok ? "heartbeat_result" : "heartbeat_error",
+                ok ? "success" : "error",
+                ok ? "info" : "error",
+                ok ? "Heartbeat result" : "Heartbeat execution failed",
+                ok ? preview(text, "Heartbeat task finished successfully.") : preview(err.getMessage(), "Heartbeat task failed."),
+                Map.of("run_id", runId)
+        );
+    }
+
+    private String sourceId(CronManager.CronJob job) {
+        return value(job.getSourceId(), job.getId());
+    }
+
+    private String name(CronManager.CronJob job) {
+        return value(job.getName(), sourceId(job));
+    }
+
+    private String preview(String value, String fallback) {
+        String text = value(value, fallback).trim();
+        return text.length() > 4000 ? text.substring(0, 4000) : text;
+    }
+
+    private String cleanText(ChannelOutboundMessage out) {
+        if (out == null) return "";
+        Object visible = out.getMeta().get("visible_text");
+        String text = visible != null ? String.valueOf(visible) : "";
+        return text.isBlank() ? out.getText() : text;
+    }
+
+    private String value(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     /**
@@ -189,7 +279,4 @@ public class CronExecutor {
         return value == null ? "" : String.valueOf(value);
     }
 
-    private String value(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value;
-    }
 }

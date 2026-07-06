@@ -483,13 +483,20 @@ public class FrontendCompatController {
     }
 
     @GetMapping("/coding-mode")
-    public Mono<ResponseEntity<?>> getCodingMode() {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", true)));
+    public Mono<ResponseEntity<?>> getCodingMode(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
+        return Mono.just(codingModeState(agentId));
+    }
+
+    @PostMapping("/coding-mode")
+    public Mono<ResponseEntity<?>> postCodingMode(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                 @RequestBody(required = false) Map<String, Object> body) {
+        return updateCodingModeState(agentId, body);
     }
 
     @PutMapping("/coding-mode")
-    public Mono<ResponseEntity<?>> updateCodingMode(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("enabled", body == null || Boolean.TRUE.equals(body.getOrDefault("enabled", true)))));
+    public Mono<ResponseEntity<?>> putCodingMode(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                @RequestBody(required = false) Map<String, Object> body) {
+        return updateCodingModeState(agentId, body);
     }
 
     @SuppressWarnings("unchecked")
@@ -568,6 +575,36 @@ public class FrontendCompatController {
             case "OFF", "AUTO", "SMART", "STRICT" -> normalized;
             default -> "AUTO";
         };
+    }
+
+    private Mono<ResponseEntity<?>> updateCodingModeState(String agentId, Map<String, Object> body) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        if (config == null) {
+            return Mono.just(ResponseEntity.notFound().build());
+        }
+        boolean enabled = body != null && Boolean.TRUE.equals(body.get("enabled"));
+        config.getCodingMode().setEnabled(enabled);
+        configManager.save();
+        multiAgentManager.reload(id);
+        return Mono.just(ResponseEntity.ok(codingModePayload(id, config)));
+    }
+
+    private ResponseEntity<?> codingModeState(String agentId) {
+        String id = AgentRequestSupport.agentId(agentId);
+        AgentConfig config = configManager.getConfig().getAgent(id);
+        if (config == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(codingModePayload(id, config));
+    }
+
+    private Map<String, Object> codingModePayload(String agentId, AgentConfig config) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("enabled", config.getCodingMode() != null && config.getCodingMode().isEnabled());
+        payload.put("project_dir", null);
+        payload.put("agent_id", agentId);
+        return payload;
     }
 
     @SuppressWarnings("unchecked")
