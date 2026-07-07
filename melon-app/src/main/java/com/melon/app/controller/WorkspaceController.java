@@ -5,6 +5,8 @@ import com.melon.core.agent.WorkspaceManager;
 import com.melon.app.service.FileGuardService;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
+import com.melon.core.config.LightContextConfig;
+import com.melon.core.util.JsonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ByteArrayResource;
@@ -17,7 +19,13 @@ import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,6 +55,9 @@ public class WorkspaceController {
     private final WorkspaceManager workspaceManager;
     private final MultiAgentManager multiAgentManager;
     private final FileGuardService fileGuardService;
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
     public WorkspaceController(ConfigManager configManager, WorkspaceManager workspaceManager,
                                MultiAgentManager multiAgentManager, FileGuardService fileGuardService) {
@@ -197,25 +208,9 @@ public class WorkspaceController {
             result.put("llm_acquire_timeout", agentConfig.getRunning().getLlmAcquireTimeout());
             result.put("history_max_length", agentConfig.getRunning().getHistoryMaxLength());
             result.putIfAbsent("context_manager_backend", "light");
-            result.putIfAbsent("memory_manager_backend", "remelight");
+            result.put("memory_manager_backend", agentConfig.getMemoryManagerBackend());
             result.put("approval_level", agentConfig.getApproval().getLevel());
-            if (!(result.get("light_context_config") instanceof Map<?, ?>)) {
-                result.put("light_context_config", Map.of(
-                        "strategy", "native",
-                        "dialog_path", "",
-                        "token_count_estimate_divisor", 4,
-                        "context_compact_config", Map.of("enabled", agentConfig.getContextCompact().isEnabled(),
-                            "compact_threshold_ratio", agentConfig.getContextCompact().getCompactThresholdRatio(),
-                            "reserve_threshold_ratio", agentConfig.getContextCompact().getReserveThresholdRatio()),
-                        "tool_result_pruning_config", Map.of("enabled", false,
-                            "pruning_recent_n", 0,
-                            "pruning_old_msg_max_bytes", 0,
-                            "pruning_recent_msg_max_bytes", 0,
-                            "offload_retention_days", 0,
-                            "exempt_file_extensions", List.of(),
-                            "exempt_tool_names", List.of())
-                ));
-            }
+            result.put("light_context_config", lightContextPayload(agentConfig));
             result.putIfAbsent("reme_light_memory_config", defaultReMeLightMemoryConfig());
             result.putIfAbsent("auto_title_config", Map.of("enabled", true, "timeout_seconds", 30));
             return ResponseEntity.ok(result);
@@ -299,8 +294,19 @@ public class WorkspaceController {
         if (body.get("history_max_length") != null) {
             agentConfig.getRunning().setHistoryMaxLength((int) numberValue(body.get("history_max_length"), agentConfig.getRunning().getHistoryMaxLength()));
         }
+        if (body.get("memory_manager_backend") != null) {
+            String backend = String.valueOf(body.get("memory_manager_backend")).trim();
+            agentConfig.setMemoryManagerBackend(backend.isBlank() ? "remelight" : backend);
+        }
         if (body.get("light_context_config") instanceof Map<?, ?> lightRaw) {
             Map<String, Object> light = toStringMap(lightRaw);
+            LightContextConfig lightConfig = JsonUtils.getMapper().convertValue(light, LightContextConfig.class);
+            if (!light.containsKey("context_compact_config")) {
+                lightConfig.setContextCompactConfig(agentConfig.getContextCompact());
+            }
+            normalizeLightContext(agentConfig, lightConfig);
+            agentConfig.setLightContextConfig(lightConfig);
+            agentConfig.setContextCompact(lightConfig.getContextCompactConfig());
             if (light.get("context_compact_config") instanceof Map<?, ?> compactRaw) {
                 Map<String, Object> compact = toStringMap(compactRaw);
                 if (compact.get("enabled") != null) {
@@ -313,6 +319,27 @@ public class WorkspaceController {
                     agentConfig.getContextCompact().setReserveThresholdRatio(numberValue(compact.get("reserve_threshold_ratio"), agentConfig.getContextCompact().getReserveThresholdRatio()));
                 }
             }
+        }
+    }
+
+    private Map<String, Object> lightContextPayload(AgentConfig agentConfig) {
+        LightContextConfig light = agentConfig.getLightContextConfig() != null
+                ? agentConfig.getLightContextConfig()
+                : new LightContextConfig();
+        normalizeLightContext(agentConfig, light);
+        return JsonUtils.getMapper().convertValue(light, new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {});
+    }
+
+    private void normalizeLightContext(AgentConfig agentConfig, LightContextConfig light) {
+        if (light.getStrategy() == null || light.getStrategy().isBlank()) light.setStrategy("scroll");
+        if (!"native".equals(light.getStrategy()) && !"scroll".equals(light.getStrategy())) light.setStrategy("scroll");
+        if (light.getDialogPath() == null || light.getDialogPath().isBlank()) light.setDialogPath("dialog");
+        if (light.getTokenCountEstimateDivisor() <= 0) light.setTokenCountEstimateDivisor(4.0);
+        if (light.getContextCompactConfig() == null) light.setContextCompactConfig(agentConfig.getContextCompact());
+        if (light.getToolResultPruningConfig() == null) light.setToolResultPruningConfig(new com.melon.core.config.ToolResultPruningConfig());
+        if (light.getScrollConfig() == null) light.setScrollConfig(new com.melon.core.config.ScrollContextConfig());
+        if (light.getScrollConfig().getDbFilename() == null || light.getScrollConfig().getDbFilename().isBlank()) {
+            light.getScrollConfig().setDbFilename("history.db");
         }
     }
 
@@ -386,32 +413,54 @@ public class WorkspaceController {
 
     @GetMapping("/audio-mode")
     public Mono<ResponseEntity<?>> getAudioMode() {
-        return Mono.just(ResponseEntity.ok(Map.of("audio_mode", "disabled")));
+        return Mono.just(ResponseEntity.ok(Map.of("audio_mode", stringValue(transcriptionConfig().get("audio_mode"), "auto"))));
     }
 
     @PutMapping("/audio-mode")
     public Mono<ResponseEntity<?>> updateAudioMode(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("audio_mode", body != null ? body.getOrDefault("audio_mode", "disabled") : "disabled")));
+        Map<String, Object> config = transcriptionConfig();
+        String audioMode = stringValue(body != null ? body.get("audio_mode") : null, "auto");
+        config.put("audio_mode", audioMode);
+        saveTranscriptionConfig(config);
+        return Mono.just(ResponseEntity.ok(Map.of("audio_mode", audioMode)));
     }
 
     @GetMapping("/transcription-providers")
     public Mono<ResponseEntity<?>> transcriptionProviders() {
-        return Mono.just(ResponseEntity.ok(Map.of("providers", List.of(), "configured_provider_id", "")));
+        Map<String, Object> config = transcriptionConfig();
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "providers", transcriptionProvidersPayload(config),
+                "configured_provider_id", stringValue(config.get("provider_id"), "")
+        )));
     }
 
     @PutMapping("/transcription-provider")
     public Mono<ResponseEntity<?>> updateTranscriptionProvider(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("provider_id", body != null ? body.getOrDefault("provider_id", "") : "")));
+        Map<String, Object> config = transcriptionConfig();
+        if (body != null) {
+            for (String key : List.of("provider_id", "base_url", "api_key", "model", "name")) {
+                if (body.containsKey(key)) config.put(key, body.get(key));
+            }
+        }
+        String providerId = stringValue(config.get("provider_id"), "");
+        saveTranscriptionConfig(config);
+        return Mono.just(ResponseEntity.ok(Map.of("provider_id", providerId)));
     }
 
     @GetMapping("/transcription-provider-type")
     public Mono<ResponseEntity<?>> transcriptionProviderType() {
-        return Mono.just(ResponseEntity.ok(Map.of("transcription_provider_type", "disabled")));
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "transcription_provider_type", stringValue(transcriptionConfig().get("transcription_provider_type"), "disabled")
+        )));
     }
 
     @PutMapping("/transcription-provider-type")
     public Mono<ResponseEntity<?>> updateTranscriptionProviderType(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of("transcription_provider_type", body != null ? body.getOrDefault("transcription_provider_type", "disabled") : "disabled")));
+        Map<String, Object> config = transcriptionConfig();
+        String type = stringValue(body != null ? body.get("transcription_provider_type") : null, "disabled");
+        config.put("transcription_provider_type", type);
+        saveTranscriptionConfig(config);
+        return Mono.just(ResponseEntity.ok(Map.of("transcription_provider_type", type)));
     }
 
     @GetMapping("/local-whisper-status")
@@ -421,9 +470,183 @@ public class WorkspaceController {
 
     @PostMapping(value = "/transcribe", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<ResponseEntity<?>> transcribeDisabled(@RequestPart("file") FilePart filePart) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of(
-                "detail", Map.of("code", "TRANSCRIPTION_DISABLED", "message", "Transcription is disabled in Java compatibility mode")
-        )));
+        Map<String, Object> config = transcriptionConfig();
+        if (!"whisper_api".equals(stringValue(config.get("transcription_provider_type"), "disabled"))) {
+            return Mono.just(transcriptionDisabledResponse());
+        }
+        Path path;
+        try {
+            path = Files.createTempFile("melon-transcribe-", ".audio");
+        } catch (IOException e) {
+            return Mono.error(e);
+        }
+        return filePart.transferTo(path)
+                .then(Mono.<ResponseEntity<?>>fromCallable(() -> forwardExternalTranscription(path, filePart.filename(), config)))
+                .doFinally(signal -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (Exception ignored) {
+                    }
+                });
+    }
+
+    private ResponseEntity<?> forwardExternalTranscription(Path file, String filename, Map<String, Object> transcriptionConfig) throws Exception {
+        Map<String, Object> provider = transcriptionProviderConfig(transcriptionConfig);
+        String baseUrl = stringValue(provider.get("base_url"), "");
+        String apiKey = stringValue(provider.get("api_key"), "");
+        String model = stringValue(provider.get("model"), "whisper-1");
+        if (baseUrl.isBlank()) {
+            return transcriptionDisabledResponse("External transcription base_url is not configured");
+        }
+        String boundary = "melon-" + java.util.UUID.randomUUID();
+        byte[] body = transcriptionMultipartBody(file, filename, model, boundary);
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(transcriptionEndpoint(baseUrl)))
+                .timeout(Duration.ofMinutes(3))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        if (!apiKey.isBlank()) {
+            builder.header("Authorization", "Bearer " + apiKey);
+        }
+        HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            return ResponseEntity.status(response.statusCode()).body(Map.of(
+                    "detail", Map.of("code", "TRANSCRIPTION_DISABLED", "message", response.body())
+            ));
+        }
+        Map<String, Object> parsed = JsonUtils.fromJson(response.body(), Map.class);
+        String text = parsed != null ? stringValue(parsed.get("text"), "") : "";
+        return ResponseEntity.ok(Map.of("text", text));
+    }
+
+    private byte[] transcriptionMultipartBody(Path file, String filename, String model, String boundary) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeMultipartField(out, boundary, "model", model);
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + safeFilename(filename) + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("Content-Type: application/octet-stream\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write(Files.readAllBytes(file));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        return out.toByteArray();
+    }
+
+    private void writeMultipartField(ByteArrayOutputStream out, String boundary, String name, String value) throws IOException {
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(value.getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private ResponseEntity<?> transcriptionDisabledResponse() {
+        return transcriptionDisabledResponse("Transcription is disabled. Configure an external Whisper-compatible provider.");
+    }
+
+    private ResponseEntity<?> transcriptionDisabledResponse(String message) {
+        return ResponseEntity.status(503).body(Map.of(
+                "detail", Map.of("code", "TRANSCRIPTION_DISABLED", "message", message)
+        ));
+    }
+
+    private String transcriptionEndpoint(String baseUrl) {
+        String base = baseUrl.replaceAll("/+$", "");
+        if (base.endsWith("/audio/transcriptions")) {
+            return base;
+        }
+        if (base.endsWith("/v1")) {
+            return base + "/audio/transcriptions";
+        }
+        return base + "/v1/audio/transcriptions";
+    }
+
+    private List<Map<String, Object>> transcriptionProvidersPayload(Map<String, Object> transcriptionConfig) {
+        List<Map<String, Object>> providers = new ArrayList<>();
+        Map<String, Object> external = transcriptionProviderConfig(transcriptionConfig);
+        if (!stringValue(external.get("base_url"), "").isBlank()) {
+            providers.add(Map.of(
+                    "id", "external",
+                    "name", stringValue(external.get("name"), "External Whisper API"),
+                    "available", true
+            ));
+        }
+        Map<String, Object> openai = providerConfig("openai");
+        if (!stringValue(openai.get("base_url"), "").isBlank() || !providerApiKey("openai", openai).isBlank()) {
+            providers.add(Map.of(
+                    "id", "openai",
+                    "name", "OpenAI",
+                    "available", !providerApiKey("openai", openai).isBlank()
+            ));
+        }
+        return providers;
+    }
+
+    private Map<String, Object> transcriptionProviderConfig(Map<String, Object> transcriptionConfig) {
+        String providerId = stringValue(transcriptionConfig.get("provider_id"), "external");
+        Map<String, Object> result = new LinkedHashMap<>();
+        if ("external".equals(providerId)) {
+            result.put("base_url", transcriptionConfig.get("base_url"));
+            result.put("api_key", transcriptionConfig.get("api_key"));
+            result.put("model", stringValue(transcriptionConfig.get("model"), "whisper-1"));
+            result.put("name", stringValue(transcriptionConfig.get("name"), "External Whisper API"));
+            return result;
+        }
+        Map<String, Object> provider = providerConfig(providerId);
+        result.put("base_url", stringValue(provider.get("base_url"), "https://api.openai.com/v1"));
+        result.put("api_key", providerApiKey(providerId, provider));
+        result.put("model", stringValue(transcriptionConfig.get("model"), "whisper-1"));
+        result.put("name", providerId);
+        return result;
+    }
+
+    private Map<String, Object> transcriptionConfig() {
+        Map<String, Object> config = new LinkedHashMap<>(JsonUtils.loadAsMap(transcriptionConfigFile()));
+        config.putIfAbsent("audio_mode", "auto");
+        config.putIfAbsent("transcription_provider_type", "disabled");
+        config.putIfAbsent("provider_id", "");
+        config.putIfAbsent("model", "whisper-1");
+        return config;
+    }
+
+    private void saveTranscriptionConfig(Map<String, Object> config) {
+        JsonUtils.save(transcriptionConfigFile(), config);
+    }
+
+    private Path transcriptionConfigFile() {
+        return configManager.resolveHomeDir().resolve("transcription.json");
+    }
+
+    private Map<String, Object> providerConfig(String providerId) {
+        Object raw = JsonUtils.loadAsMap(providerConfigFile()).get(providerId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (raw instanceof Map<?, ?> map) {
+            map.forEach((key, value) -> result.put(String.valueOf(key), value));
+        }
+        return result;
+    }
+
+    private Path providerConfigFile() {
+        return configManager.resolveHomeDir().resolve("providers.json");
+    }
+
+    private String providerApiKey(String providerId, Map<String, Object> provider) {
+        String apiKey = stringValue(provider.get("api_key"), "");
+        if (!apiKey.isBlank()) {
+            return apiKey;
+        }
+        String env = switch (providerId) {
+            case "openai" -> "OPENAI_API_KEY";
+            default -> "";
+        };
+        return env.isBlank() ? "" : stringValue(System.getenv(env), "");
+    }
+
+    private String safeFilename(String filename) {
+        String value = filename == null || filename.isBlank() ? "audio.webm" : filename;
+        return value.replace("\"", "").replace("\r", "").replace("\n", "");
+    }
+
+    private String stringValue(Object value, String fallback) {
+        return value == null || String.valueOf(value).isBlank() ? fallback : String.valueOf(value);
     }
 
     @GetMapping("/files")

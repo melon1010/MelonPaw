@@ -40,6 +40,9 @@ public class McpToolkitContributor implements ToolkitContributor {
             }
             if (!mcpClientManager.getConnectionState(server.getId()).connected()) continue;
             for (McpClientManager.McpTool tool : mcpClientManager.listTools(server.getId())) {
+                if (server.getToolWhitelist() != null && !server.getToolWhitelist().contains(tool.getName())) {
+                    continue;
+                }
                 String toolName = safeToolName(tool.getName());
                 if (toolName.isBlank()) continue;
                 if (toolkit.getToolNames().contains(toolName)) {

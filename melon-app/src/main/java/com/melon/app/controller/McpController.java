@@ -120,24 +120,23 @@ public class McpController {
 
     @GetMapping("/tools/{clientKey}")
     public Mono<ResponseEntity<?>> listClientTools(@PathVariable String clientKey) {
-        return Mono.fromCallable(() -> ResponseEntity.ok(mcpClientManager.listTools(clientKey).stream()
-                .map(tool -> {
-                    Map<String, Object> info = tool.toMap();
-                    info.put("enabled", true);
-                    info.put("client_key", clientKey);
-                    return info;
-                })
-                .collect(Collectors.toList())));
+        return Mono.fromCallable(() -> ResponseEntity.ok(toolInfos(clientKey)));
     }
 
     @PutMapping("/tools/{clientKey}")
     public Mono<ResponseEntity<?>> updateToolWhitelist(@PathVariable String clientKey, @RequestBody Map<String, Object> body) {
-        return listClientTools(clientKey);
+        return Mono.fromCallable(() -> {
+            var config = mcpClientManager.getServer(clientKey);
+            if (config == null) return ResponseEntity.notFound().build();
+            mcpClientManager.setToolWhitelist(clientKey, toStringListOrNull(body != null ? body.get("tools") : null));
+            multiAgentManager.reloadAll();
+            return ResponseEntity.ok(toolInfos(clientKey));
+        });
     }
 
     @GetMapping("/access-principals")
     public Mono<ResponseEntity<?>> accessPrincipals() {
-        return Mono.just(ResponseEntity.ok(List.of()));
+        return Mono.fromCallable(() -> ResponseEntity.ok(recentAccessPrincipals()));
     }
 
     @GetMapping("/policy/{clientKey}")
@@ -156,23 +155,34 @@ public class McpController {
     }
 
     @PostMapping("/oauth/start/{clientKey}")
-    public Mono<ResponseEntity<?>> startOAuth(@PathVariable String clientKey) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "auth_url", "",
-                "session_id", "",
-                "authorization_url", "",
-                "detail", "OAuth MCP clients are not implemented in Java compatibility mode"
-        )));
+    public Mono<ResponseEntity<?>> startOAuth(@PathVariable String clientKey,
+                                              @RequestBody(required = false) Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            try {
+                Map<String, Object> status = new LinkedHashMap<>(mcpClientManager.configureOAuth(clientKey, body));
+                status.put("auth_url", "");
+                status.put("session_id", clientKey);
+                status.put("authorization_url", "");
+                return ResponseEntity.ok(status);
+            } catch (Exception e) {
+                return ResponseEntity.badRequest().body(Map.of("detail", e.getMessage()));
+            }
+        });
     }
 
     @GetMapping("/oauth/status/{clientKey}")
     public Mono<ResponseEntity<?>> oauthStatus(@PathVariable String clientKey) {
-        return Mono.just(ResponseEntity.ok(Map.of("authorized", false, "expires_at", 0, "scope", "")));
+        return Mono.fromCallable(() -> ResponseEntity.ok(mcpClientManager.oauthStatus(clientKey)));
     }
 
     @DeleteMapping("/oauth/{clientKey}")
     public Mono<ResponseEntity<?>> revokeOAuth(@PathVariable String clientKey) {
-        return Mono.just(ResponseEntity.ok(Map.of("message", "oauth disabled")));
+        return Mono.fromCallable(() -> {
+            if (!mcpClientManager.clearOAuth(clientKey)) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(Map.of("message", "oauth disabled"));
+        });
     }
 
     /**
@@ -183,7 +193,7 @@ public class McpController {
         return Mono.fromCallable(() -> {
             List<Map<String, Object>> servers = mcpClientManager.listServers().stream()
                     .map(config -> {
-                        var map = config.toMap();
+                        var map = serverMap(config);
                         var state = mcpClientManager.getConnectionState(config.getId());
                         map.put("connected", state.connected());
                         if (state.error() != null) {
@@ -228,7 +238,7 @@ public class McpController {
                 mcpClientManager.register(config);
                 multiAgentManager.reloadAll();
                 log.info("MCP server registered: id={}, name={}", config.getId(), config.getName());
-                return ResponseEntity.ok(config.toMap());
+                return ResponseEntity.ok(serverMap(config));
             } catch (Exception e) {
                 log.error("Failed to register MCP server", e);
                 return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
@@ -336,6 +346,7 @@ public class McpController {
         normalized.putIfAbsent("args", body.getOrDefault("args", List.of()));
         normalized.putIfAbsent("env", body.getOrDefault("env", Map.of()));
         normalized.putIfAbsent("headers", body.getOrDefault("headers", Map.of()));
+        normalized.putIfAbsent("oauth", firstPresent(body, "oauth"));
         normalized.putIfAbsent("cwd", body.getOrDefault("cwd", ""));
         normalized.putIfAbsent("url", firstPresent(body, "url", "server_url"));
         normalized.putIfAbsent("enabled", body.getOrDefault("enabled", true));
@@ -352,7 +363,7 @@ public class McpController {
     }
 
     private Map<String, Object> clientInfo(McpClientManager.McpServerConfig config) {
-        Map<String, Object> map = new LinkedHashMap<>(config.toMap());
+        Map<String, Object> map = serverMap(config);
         var state = mcpClientManager.getConnectionState(config.getId());
         map.put("key", config.getId());
         map.put("client_key", config.getId());
@@ -360,15 +371,22 @@ public class McpController {
         map.put("description", "");
         map.putIfAbsent("headers", Map.of());
         map.putIfAbsent("cwd", "");
-        map.put("tools", null);
-        map.put("oauth_status", null);
-        map.put("access_summary", Map.of("default_effect", policy(config.getId()).get("default_effect"), "overrides_count", 0));
+        map.put("tools", config.getToolWhitelist());
+        map.put("oauth", safeOAuth(config.getOAuth()));
+        map.put("oauth_status", config.getOAuth() == null ? null : mcpClientManager.oauthStatus(config.getId()));
+        map.put("access_summary", accessSummary(config.getId()));
         map.put("connected", state.connected());
         map.put("status", state.connected() ? "connected" : "disconnected");
         map.put("available", config.isEnabled());
         if (state.error() != null) {
             map.put("error", state.error());
         }
+        return map;
+    }
+
+    private Map<String, Object> serverMap(McpClientManager.McpServerConfig config) {
+        Map<String, Object> map = new LinkedHashMap<>(config.toMap());
+        map.put("oauth", safeOAuth(config.getOAuth()));
         return map;
     }
 
@@ -388,6 +406,78 @@ public class McpController {
         policy.put("tool_overrides", List.of());
         policy.put("unmanaged_rules_count", 0);
         return policy;
+    }
+
+    private Map<String, Object> accessSummary(String clientKey) {
+        Map<String, Object> p = policy(clientKey);
+        int overrides = sizeOf(p.get("client_overrides")) + sizeOf(p.get("tool_defaults")) + sizeOf(p.get("tool_overrides"));
+        return Map.of("default_effect", p.getOrDefault("default_effect", "allow"), "overrides_count", overrides);
+    }
+
+    private int sizeOf(Object value) {
+        return value instanceof List<?> list ? list.size() : 0;
+    }
+
+    private List<Map<String, Object>> toolInfos(String clientKey) {
+        var config = mcpClientManager.getServer(clientKey);
+        if (config == null) return List.of();
+        List<String> whitelist = config.getToolWhitelist();
+        return mcpClientManager.listTools(clientKey).stream()
+                .map(tool -> {
+                    Map<String, Object> info = tool.toMap();
+                    info.put("enabled", whitelist == null || whitelist.contains(tool.getName()));
+                    info.put("client_key", clientKey);
+                    return info;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private List<Map<String, Object>> recentAccessPrincipals() {
+        List<Map<String, Object>> principals = new java.util.ArrayList<>();
+        for (var config : configManager.getConfig().getAgents().entrySet()) {
+            String agentId = config.getKey();
+            try {
+                java.nio.file.Path chats = configManager.resolveWorkspaceDir(agentId).resolve("chats.json");
+                Map<String, Object> data = JsonUtils.loadAsMap(chats);
+                Object raw = data.get("chats");
+                if (!(raw instanceof List<?> list)) continue;
+                for (Object item : list) {
+                    if (!(item instanceof Map<?, ?> chatRaw)) continue;
+                    Map<String, Object> chat = new LinkedHashMap<>();
+                    chatRaw.forEach((k, v) -> chat.put(String.valueOf(k), v));
+                    String channel = String.valueOf(chat.getOrDefault("channel", "console"));
+                    String userId = String.valueOf(chat.getOrDefault("user_id", "default"));
+                    principals.add(Map.of(
+                            "source_type", "channel",
+                            "source_value", channel,
+                            "subject_type", "user",
+                            "subject_value", userId,
+                            "label", channel + ":" + userId,
+                            "chat_id", String.valueOf(chat.getOrDefault("id", "")),
+                            "chat_name", String.valueOf(chat.getOrDefault("name", "")),
+                            "session_id", String.valueOf(chat.getOrDefault("session_id", "")),
+                            "agent_id", agentId
+                    ));
+                }
+            } catch (Exception e) {
+                log.debug("Failed to read access principals for agent {}", agentId, e);
+            }
+        }
+        return principals.stream().limit(200).toList();
+    }
+
+    private Map<String, Object> safeOAuth(McpClientManager.OAuthConfig oauth) {
+        if (oauth == null) return null;
+        Map<String, Object> map = new LinkedHashMap<>(oauth.toMap());
+        if (map.get("client_secret") != null) map.put("client_secret", "***");
+        if (map.get("refresh_token") != null) map.put("refresh_token", "***");
+        return map;
+    }
+
+    private List<String> toStringListOrNull(Object value) {
+        if (value == null) return null;
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().filter(java.util.Objects::nonNull).map(String::valueOf).filter(s -> !s.isBlank()).distinct().toList();
     }
 
     private java.nio.file.Path policyFile(String clientKey) {

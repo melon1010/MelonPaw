@@ -44,8 +44,8 @@ public class AuthService {
     private final boolean authDisabled;
 
     public AuthService() {
-        this.authDisabled = isAuthDisabled();
         this.passwordHash = resolvePasswordHash();
+        this.authDisabled = resolveAuthDisabled(passwordHash);
         this.jwtSecret = resolveJwtSecret();
         log.info("AuthService initialized: authDisabled={}, passwordConfigured={}", authDisabled, passwordHash != null);
     }
@@ -122,8 +122,18 @@ public class AuthService {
      * 检查认证是否关闭.
      */
     public boolean isAuthDisabled() {
-        String disabled = System.getenv(ENV_AUTH_DISABLED);
-        return "true".equalsIgnoreCase(disabled) || "1".equals(disabled);
+        return authDisabled;
+    }
+
+    public boolean hasConfiguredPassword() {
+        return passwordHash != null;
+    }
+
+    public boolean checkPassword(String password) {
+        if (authDisabled) {
+            return true;
+        }
+        return passwordHash != null && verifyPassword(password, passwordHash);
     }
 
     // ======================== Password Hashing (SHA-256) ========================
@@ -268,6 +278,14 @@ public class AuthService {
         return null;
     }
 
+    private boolean resolveAuthDisabled(String configuredPasswordHash) {
+        String disabled = System.getenv(ENV_AUTH_DISABLED);
+        if ("true".equalsIgnoreCase(disabled) || "1".equals(disabled)) {
+            return true;
+        }
+        return configuredPasswordHash == null;
+    }
+
     private String resolveJwtSecret() {
         String secret = System.getenv(ENV_JWT_SECRET);
         if (secret != null && !secret.isBlank()) {
@@ -315,9 +333,9 @@ public class AuthService {
 
         public Map<String, Object> toMap() {
             if (success) {
-                return Map.of("status", "ok", "token", token, "subject", subject);
+                return Map.of("status", "ok", "token", token, "subject", subject, "username", subject);
             }
-            return Map.of("status", "error", "error", error);
+            return Map.of("status", "error", "error", error, "detail", error);
         }
     }
 }

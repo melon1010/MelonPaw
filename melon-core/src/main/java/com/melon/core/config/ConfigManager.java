@@ -148,6 +148,15 @@ public class ConfigManager {
             mergeDefaultTools(ac.getTools());
             if (ac.getRunning() == null) ac.setRunning(new RunningConfig());
             if (ac.getContextCompact() == null) ac.setContextCompact(new ContextCompactConfig());
+            if (ac.getLightContextConfig() == null) {
+                LightContextConfig light = new LightContextConfig();
+                light.setContextCompactConfig(ac.getContextCompact());
+                ac.setLightContextConfig(light);
+            }
+            mergeLightContextDefaults(ac);
+            if (ac.getMemoryManagerBackend() == null || ac.getMemoryManagerBackend().isBlank()) {
+                ac.setMemoryManagerBackend("remelight");
+            }
             if (ac.getCodingMode() == null) ac.setCodingMode(new CodingModeConfig());
             if (ac.getPlanMode() == null) ac.setPlanMode(new PlanModeConfig());
             if (ac.getApproval() == null) ac.setApproval(new AgentConfig.ApprovalConfig());
@@ -155,6 +164,7 @@ public class ConfigManager {
             if (ac.getLanguage() == null || ac.getLanguage().isBlank()) ac.setLanguage("zh");
             if (ac.getTimezone() == null || ac.getTimezone().isBlank()) ac.setTimezone("UTC");
             if (ac.getFrontendRunningConfig() == null) ac.setFrontendRunningConfig(Map.of());
+            mergeFrontendRunningConfig(ac);
         }
         return loaded;
     }
@@ -224,6 +234,12 @@ public class ConfigManager {
             frc.forEach((key, value) -> copy.put(String.valueOf(key), value));
             agent.setFrontendRunningConfig(copy);
         }
+        if (raw.get("light_context_config") != null) {
+            agent.setLightContextConfig(jsonMapper.convertValue(raw.get("light_context_config"), LightContextConfig.class));
+        }
+        if (raw.get("memory_manager_backend") != null) {
+            agent.setMemoryManagerBackend(String.valueOf(raw.get("memory_manager_backend")));
+        }
         return agent;
     }
 
@@ -291,6 +307,41 @@ public class ConfigManager {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private void mergeLightContextDefaults(AgentConfig agent) {
+        LightContextConfig light = agent.getLightContextConfig();
+        if (light.getStrategy() == null || light.getStrategy().isBlank()) light.setStrategy("scroll");
+        if (!"native".equals(light.getStrategy()) && !"scroll".equals(light.getStrategy())) light.setStrategy("scroll");
+        if (light.getDialogPath() == null || light.getDialogPath().isBlank()) light.setDialogPath("dialog");
+        if (light.getTokenCountEstimateDivisor() <= 0) light.setTokenCountEstimateDivisor(4.0);
+        if (light.getContextCompactConfig() == null) light.setContextCompactConfig(agent.getContextCompact());
+        if (light.getToolResultPruningConfig() == null) light.setToolResultPruningConfig(new ToolResultPruningConfig());
+        if (light.getScrollConfig() == null) light.setScrollConfig(new ScrollContextConfig());
+        ScrollContextConfig scroll = light.getScrollConfig();
+        if (scroll.getDbFilename() == null || scroll.getDbFilename().isBlank()) scroll.setDbFilename("history.db");
+        if (scroll.getToolOutputTokenCap() <= 0) scroll.setToolOutputTokenCap(3000);
+        if (scroll.getReplTimeoutS() <= 0) scroll.setReplTimeoutS(300);
+        if (scroll.getHistoryRetentionDays() < 0) scroll.setHistoryRetentionDays(30);
+        agent.setContextCompact(light.getContextCompactConfig());
+    }
+
+    private void mergeFrontendRunningConfig(AgentConfig agent) {
+        Map<String, Object> frontend = agent.getFrontendRunningConfig();
+        if (frontend == null || frontend.isEmpty()) return;
+        if (frontend.get("light_context_config") instanceof Map<?, ?> lightRaw) {
+            LightContextConfig light = jsonMapper.convertValue(lightRaw, LightContextConfig.class);
+            if (!lightRaw.containsKey("context_compact_config")) {
+                light.setContextCompactConfig(agent.getContextCompact());
+            }
+            agent.setLightContextConfig(light);
+            mergeLightContextDefaults(agent);
+        }
+        if (frontend.get("memory_manager_backend") != null
+                && (agent.getMemoryManagerBackend() == null || agent.getMemoryManagerBackend().isBlank()
+                || "remelight".equals(agent.getMemoryManagerBackend()))) {
+            agent.setMemoryManagerBackend(String.valueOf(frontend.get("memory_manager_backend")));
+        }
     }
 
     private void mergeDefaultTools(ToolsConfig tools) {

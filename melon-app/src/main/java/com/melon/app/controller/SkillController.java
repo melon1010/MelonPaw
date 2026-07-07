@@ -18,9 +18,17 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.melon.core.util.ValueUtils.stringValue;
 
@@ -32,12 +40,18 @@ import static com.melon.core.util.ValueUtils.stringValue;
 public class SkillController {
 
     private static final Logger log = LoggerFactory.getLogger(SkillController.class);
+    private static final long MAX_REMOTE_SKILL_ZIP_BYTES = 100L * 1024L * 1024L;
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
 
     private final SkillService skillService;
     private final BuiltinSkillService builtinSkillService;
     private final SecuritySettingsService securitySettingsService;
     private final SkillScanner skillScanner;
     private final MultiAgentManager multiAgentManager;
+    private final Map<String, Map<String, Object>> hubInstallTasks = new ConcurrentHashMap<>();
 
     public SkillController(SkillService skillService, BuiltinSkillService builtinSkillService,
                            SecuritySettingsService securitySettingsService,
@@ -97,34 +111,73 @@ public class SkillController {
     @GetMapping("/hub/search")
     public Mono<ResponseEntity<?>> searchHubSkills(@RequestParam(required = false) String q,
                                                    @RequestParam(defaultValue = "20") int limit) {
-        return Mono.just(ResponseEntity.ok(List.of()));
+        return Mono.fromCallable(() -> {
+            String needle = stringValue(q, "").toLowerCase(Locale.ROOT);
+            int max = Math.max(1, Math.min(limit, 100));
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (Map<String, Object> source : builtinSkillService.listBuiltinSources()) {
+                Map<String, Object> item = hubCandidate(source, "builtin");
+                if (matchesHubQuery(item, needle)) {
+                    results.add(item);
+                }
+                if (results.size() >= max) {
+                    return ResponseEntity.ok(results);
+                }
+            }
+            for (Map<String, Object> source : skillService.listPoolSkills()) {
+                Map<String, Object> item = hubCandidate(source, "pool");
+                if (matchesHubQuery(item, needle)) {
+                    results.add(item);
+                }
+                if (results.size() >= max) {
+                    break;
+                }
+            }
+            return ResponseEntity.ok(results);
+        });
     }
 
     @PostMapping("/hub/install/start")
-    public Mono<ResponseEntity<?>> startHubInstall(@RequestBody(required = false) Map<String, Object> body) {
-        String taskId = UUID.randomUUID().toString();
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "task_id", taskId,
-                "status", "completed",
-                "installed", false,
-                "enabled", false,
-                "detail", "Remote skill hub install is not implemented in Java compatibility mode"
-        )));
+    public Mono<ResponseEntity<?>> startHubInstall(@RequestHeader(value = "X-Agent-Id", required = false) String agentId,
+                                                  @RequestBody(required = false) Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            String taskId = UUID.randomUUID().toString();
+            Map<String, Object> task = installTask(taskId, body, "importing", null, null);
+            hubInstallTasks.put(taskId, task);
+            try {
+                Map<String, Object> result = installLocalHubSkill(safeAgentId(agentId), body, true);
+                task = installTask(taskId, body, "completed", null, result);
+            } catch (Exception e) {
+                task = installTask(taskId, body, "failed", e.getMessage(), null);
+            }
+            hubInstallTasks.put(taskId, task);
+            return ResponseEntity.ok(task);
+        });
     }
 
     @GetMapping("/hub/install/status/{taskId}")
     public Mono<ResponseEntity<?>> hubInstallStatus(@PathVariable String taskId) {
-        return Mono.just(ResponseEntity.ok(Map.of("task_id", taskId, "status", "completed", "installed", false)));
+        return Mono.just(ResponseEntity.ok(hubInstallTasks.getOrDefault(taskId,
+                installTask(taskId, null, "failed", "Unknown install task", null))));
     }
 
     @PostMapping("/hub/install/cancel/{taskId}")
     public Mono<ResponseEntity<?>> cancelHubInstall(@PathVariable String taskId) {
-        return Mono.just(ResponseEntity.ok(Map.of("task_id", taskId, "status", "cancelled")));
+        return Mono.fromCallable(() -> {
+            Map<String, Object> task = hubInstallTasks.get(taskId);
+            if (task == null || "completed".equals(task.get("status")) || "failed".equals(task.get("status"))) {
+                return ResponseEntity.ok(Map.of("task_id", taskId, "status", task == null ? "cancelled" : task.get("status")));
+            }
+            Map<String, Object> cancelled = installTask(taskId, task, "cancelled", null, null);
+            hubInstallTasks.put(taskId, cancelled);
+            return ResponseEntity.ok(cancelled);
+        });
     }
 
     @PostMapping("/pool/import")
     public Mono<ResponseEntity<?>> importPoolFromHub(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.status(501).body(Map.of("detail", "Remote skill import is not implemented")));
+        return Mono.<ResponseEntity<?>>fromCallable(() -> responseForLocalImport(importLocalHubSkillToPool(body)))
+                .onErrorResume(e -> Mono.just(badRequest(e)));
     }
 
     @PostMapping("/pool/create")
@@ -575,6 +628,282 @@ public class SkillController {
         return results;
     }
 
+    private Map<String, Object> hubCandidate(Map<String, Object> raw, String sourceType) {
+        String name = stringValue(raw.get("name"), "");
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("slug", sourceType + "/" + name);
+        item.put("name", name);
+        item.put("description", stringValue(raw.get("description"), ""));
+        item.put("version", stringValue(raw.get("version_text"), ""));
+        item.put("source_url", sourceType + "://" + name);
+        item.put("source", sourceType);
+        item.put("status", stringValue(raw.get("status"), ""));
+        return item;
+    }
+
+    private boolean matchesHubQuery(Map<String, Object> item, String query) {
+        if (query.isBlank()) {
+            return true;
+        }
+        return stringValue(item.get("name"), "").toLowerCase(Locale.ROOT).contains(query)
+                || stringValue(item.get("description"), "").toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private Map<String, Object> installLocalHubSkill(String agentId, Map<String, Object> body, boolean defaultEnable) throws Exception {
+        Map<String, Object> poolResult = importLocalHubSkillToPool(body);
+        if (hasConflicts(poolResult)) {
+            return poolResult;
+        }
+        String name = importedSkillName(poolResult);
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("Workspace install requires a single-skill zip or target_name");
+        }
+        boolean enable = body == null ? defaultEnable : !Boolean.FALSE.equals(body.get("enable"));
+        boolean overwrite = Boolean.TRUE.equals(body != null ? body.get("overwrite") : null);
+        Map<String, Object> download = skillService.downloadPoolSkillToWorkspace(agentId, name, overwrite);
+        if (Boolean.TRUE.equals(download.get("conflict"))) {
+            return Map.of("installed", false, "conflicts", List.of(download), "name", name);
+        }
+        if (enable) {
+            skillService.enableSkill(agentId, name);
+        } else {
+            skillService.disableSkill(agentId, name);
+        }
+        reload(agentId);
+        Map<String, Object> result = new LinkedHashMap<>(poolResult);
+        result.put("installed", true);
+        result.put("enabled", enable);
+        result.put("workspace_id", agentId);
+        result.put("installed_from", poolResult.get("source_url"));
+        return result;
+    }
+
+    private Map<String, Object> importLocalHubSkillToPool(Map<String, Object> body) throws Exception {
+        String remoteUrl = firstNonBlank(body, "source_url", "bundle_url");
+        if (remoteUrl.startsWith("http://") || remoteUrl.startsWith("https://")) {
+            return importRemoteHubSkillToPool(body, remoteUrl);
+        }
+        HubSource source = localHubSource(body);
+        String targetName = stringValue(body != null ? body.get("target_name") : null, "");
+        if (!targetName.isBlank() && !targetName.equals(source.name())) {
+            throw new IllegalArgumentException("target_name rename is not supported for local skill sources");
+        }
+        if ("pool".equals(source.type())) {
+            if (poolSkill(source.name()).isEmpty()) {
+                throw new java.nio.file.NoSuchFileException("Pool skill not found: " + source.name());
+            }
+            return localImportResult(source.name(), source.url(), true);
+        }
+
+        boolean overwrite = Boolean.TRUE.equals(body != null ? body.get("overwrite_conflicts") : null)
+                || Boolean.TRUE.equals(body != null ? body.get("overwrite") : null);
+        Map<String, Object> imported = builtinSkillService.importBuiltins(
+                List.of(Map.of("skill_name", source.name())),
+                overwrite
+        );
+        if (hasConflicts(imported)) {
+            Map<String, Object> result = new LinkedHashMap<>(imported);
+            result.put("installed", false);
+            result.put("name", source.name());
+            result.put("source_url", source.url());
+            return result;
+        }
+        return localImportResult(source.name(), source.url(), false);
+    }
+
+    private Map<String, Object> importRemoteHubSkillToPool(Map<String, Object> body, String sourceUrl) throws Exception {
+        String targetName = stringValue(body != null ? body.get("target_name") : null, "");
+        Path zip = downloadRemoteZip(sourceUrl);
+        try {
+            Map<String, Object> imported = new LinkedHashMap<>(skillService.importPoolSkillZip(zip, targetName, Map.of()));
+            imported.put("source_url", sourceUrl);
+            imported.put("installed_from", sourceUrl);
+            String name = importedSkillName(imported);
+            if (!name.isBlank()) {
+                imported.put("name", name);
+                imported.put("enabled", true);
+                imported.put("installed", true);
+            }
+            if (hasConflicts(imported)) {
+                imported.put("installed", false);
+            }
+            return imported;
+        } finally {
+            Files.deleteIfExists(zip);
+        }
+    }
+
+    private HubSource localHubSource(Map<String, Object> body) throws Exception {
+        String raw = firstNonBlank(body, "source_url", "bundle_url", "skill_name", "source_name", "name");
+        if (raw.isBlank()) {
+            throw new IllegalArgumentException("bundle_url or skill_name is required");
+        }
+        if (raw.startsWith("builtin://")) {
+            return requireKnownSource("builtin", raw.substring("builtin://".length()), raw);
+        }
+        if (raw.startsWith("builtin:")) {
+            return requireKnownSource("builtin", raw.substring("builtin:".length()), raw);
+        }
+        if (raw.startsWith("pool://")) {
+            return requireKnownSource("pool", raw.substring("pool://".length()), raw);
+        }
+        if (raw.startsWith("pool:")) {
+            return requireKnownSource("pool", raw.substring("pool:".length()), raw);
+        }
+        if (raw.startsWith("http://") || raw.startsWith("https://")) {
+            throw new IllegalArgumentException("Remote skill hub import is not implemented");
+        }
+        if (builtinSource(raw).isPresent()) {
+            return new HubSource("builtin", raw, "builtin://" + raw);
+        }
+        if (poolSkill(raw).isPresent()) {
+            return new HubSource("pool", raw, "pool://" + raw);
+        }
+        throw new java.nio.file.NoSuchFileException("Local skill source not found: " + raw);
+    }
+
+    private HubSource requireKnownSource(String type, String name, String url) throws Exception {
+        String normalized = name == null ? "" : name.trim();
+        if (normalized.isBlank()) {
+            throw new IllegalArgumentException("Skill name is required");
+        }
+        if ("builtin".equals(type) && builtinSource(normalized).isPresent()) {
+            return new HubSource(type, normalized, url);
+        }
+        if ("pool".equals(type) && poolSkill(normalized).isPresent()) {
+            return new HubSource(type, normalized, url);
+        }
+        throw new java.nio.file.NoSuchFileException("Local skill source not found: " + normalized);
+    }
+
+    private Optional<Map<String, Object>> builtinSource(String name) throws Exception {
+        for (Map<String, Object> source : builtinSkillService.listBuiltinSources()) {
+            if (name.equals(stringValue(source.get("name"), ""))) {
+                return Optional.of(source);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Map<String, Object>> poolSkill(String name) {
+        for (Map<String, Object> source : skillService.listPoolSkills()) {
+            if (name.equals(stringValue(source.get("name"), ""))) {
+                return Optional.of(source);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private String firstNonBlank(Map<String, Object> body, String... keys) {
+        if (body == null) {
+            return "";
+        }
+        for (String key : keys) {
+            String value = stringValue(body.get(key), "").trim();
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private Map<String, Object> localImportResult(String name, String sourceUrl, boolean alreadyInPool) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("installed", true);
+        result.put("name", name);
+        result.put("enabled", true);
+        result.put("source_url", sourceUrl);
+        result.put("installed_from", sourceUrl);
+        result.put("already_in_pool", alreadyInPool);
+        return result;
+    }
+
+    private String importedSkillName(Map<String, Object> result) {
+        String name = stringValue(result != null ? result.get("name") : null, "");
+        if (!name.isBlank()) {
+            return name;
+        }
+        Object imported = result != null ? result.get("imported") : null;
+        if (imported instanceof List<?> list && list.size() == 1) {
+            return stringValue(list.get(0), "");
+        }
+        return "";
+    }
+
+    private Path downloadRemoteZip(String sourceUrl) throws Exception {
+        URI uri = URI.create(sourceUrl);
+        HttpRequest request = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(60))
+                .GET()
+                .build();
+        HttpResponse<InputStream> response = HTTP.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalArgumentException("Skill download failed: HTTP " + response.statusCode());
+        }
+        long declared = response.headers().firstValueAsLong("content-length").orElse(-1L);
+        if (declared > MAX_REMOTE_SKILL_ZIP_BYTES) {
+            throw new IllegalArgumentException("Skill archive is too large");
+        }
+        Path zip = Files.createTempFile("melon-skill-remote-", ".zip");
+        boolean ok = false;
+        try (InputStream input = response.body(); OutputStream output = Files.newOutputStream(zip)) {
+            byte[] buffer = new byte[64 * 1024];
+            long total = 0L;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > MAX_REMOTE_SKILL_ZIP_BYTES) {
+                    throw new IllegalArgumentException("Skill archive is too large");
+                }
+                output.write(buffer, 0, read);
+            }
+            ok = true;
+            return zip;
+        } finally {
+            if (!ok) {
+                Files.deleteIfExists(zip);
+            }
+        }
+    }
+
+    private ResponseEntity<?> responseForLocalImport(Map<String, Object> result) {
+        if (hasConflicts(result)) {
+            return ResponseEntity.status(409).body(result);
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    private boolean hasConflicts(Map<String, Object> result) {
+        if (result == null) {
+            return false;
+        }
+        Object conflicts = result.get("conflicts");
+        return conflicts instanceof List<?> list && !list.isEmpty();
+    }
+
+    private Map<String, Object> installTask(String taskId, Map<String, Object> body, String status,
+                                            String error, Map<String, Object> result) {
+        long now = System.currentTimeMillis() / 1000L;
+        Map<String, Object> task = new LinkedHashMap<>();
+        task.put("task_id", taskId);
+        task.put("bundle_url", firstNonBlank(body, "bundle_url", "source_url"));
+        task.put("version", stringValue(body != null ? body.get("version") : null, ""));
+        task.put("enable", body == null || !Boolean.FALSE.equals(body.get("enable")));
+        task.put("status", hasConflicts(result) ? "failed" : status);
+        task.put("error", hasConflicts(result) ? "Skill import conflict" : error);
+        task.put("result", result);
+        task.put("created_at", numberValue(body != null ? body.get("created_at") : null, now));
+        task.put("updated_at", now);
+        return task;
+    }
+
+    private long numberValue(Object value, long fallback) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return fallback;
+    }
+
     @SuppressWarnings("unchecked")
     private List<String> targetWorkspaceIds(Map<String, Object> body) {
         if (body != null && Boolean.TRUE.equals(body.get("all_workspaces"))) {
@@ -714,5 +1043,7 @@ public class SkillController {
     private interface ZipImporter {
         Map<String, Object> importZip(Path path) throws Exception;
     }
+
+    private record HubSource(String type, String name, String url) {}
 
 }

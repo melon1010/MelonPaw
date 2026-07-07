@@ -39,6 +39,12 @@ public class AgentConfig {
     @JsonProperty("context_compact")
     private ContextCompactConfig contextCompact = new ContextCompactConfig();
 
+    @JsonProperty("light_context_config")
+    private LightContextConfig lightContextConfig;
+
+    @JsonProperty("memory_manager_backend")
+    private String memoryManagerBackend = "remelight";
+
     @JsonProperty("coding_mode")
     private CodingModeConfig codingMode = new CodingModeConfig();
 
@@ -92,6 +98,12 @@ public class AgentConfig {
 
     public ContextCompactConfig getContextCompact() { return contextCompact; }
     public void setContextCompact(ContextCompactConfig contextCompact) { this.contextCompact = contextCompact; }
+
+    public LightContextConfig getLightContextConfig() { return lightContextConfig; }
+    public void setLightContextConfig(LightContextConfig lightContextConfig) { this.lightContextConfig = lightContextConfig; }
+
+    public String getMemoryManagerBackend() { return memoryManagerBackend; }
+    public void setMemoryManagerBackend(String memoryManagerBackend) { this.memoryManagerBackend = memoryManagerBackend; }
 
     public CodingModeConfig getCodingMode() { return codingMode; }
     public void setCodingMode(CodingModeConfig codingMode) { this.codingMode = codingMode; }

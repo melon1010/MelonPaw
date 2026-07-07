@@ -50,6 +50,7 @@ public class ToolsConfig {
         put(m, "submit_to_agent", true, "Submit a background task to another configured agent", "📨");
         put(m, "check_agent_task", true, "Check the status of a background agent task", "⏳");
         put(m, "spawn_subagent", true, "Spawn an ephemeral sub-task within the current workspace", "🔀");
+        put(m, "recall_history", true, "Search and read durable conversation history", "🧠");
         return m;
     }
 

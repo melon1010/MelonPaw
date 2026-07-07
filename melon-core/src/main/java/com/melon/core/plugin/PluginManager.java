@@ -7,8 +7,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -180,6 +182,39 @@ public class PluginManager {
         return Collections.unmodifiableSet(plugins.keySet());
     }
 
+    public Path getPluginsDir() {
+        return pluginsDir;
+    }
+
+    public List<PluginDescriptor> discoverPlugins() {
+        return registry.discoverPlugins();
+    }
+
+    public PluginDescriptor readDescriptor(Path pluginDir) {
+        return registry.loadDescriptor(pluginDir);
+    }
+
+    public PluginDescriptor loadInstalledPlugin(String pluginId) throws Exception {
+        for (PluginDescriptor descriptor : discoverPlugins()) {
+            if (pluginId.equals(descriptor.getId())) {
+                unloadPlugin(pluginId);
+                loadPlugin(descriptor);
+                return descriptor;
+            }
+        }
+        throw new NoSuchElementException("Plugin not found: " + pluginId);
+    }
+
+    public boolean uninstallInstalledPlugin(String pluginId) throws IOException {
+        unloadPlugin(pluginId);
+        Path target = pluginsDir.resolve(pluginId).normalize();
+        if (!target.startsWith(pluginsDir.normalize()) || !Files.exists(target)) {
+            return false;
+        }
+        deleteDirectory(target);
+        return true;
+    }
+
     private PluginContext createPluginContext(PluginDescriptor descriptor) {
         Path pluginDataDir = pluginsDir.resolve(descriptor.getId()).resolve("data");
         try {
@@ -188,5 +223,13 @@ public class PluginManager {
             log.warn("Failed to create plugin data dir: {}", pluginDataDir);
         }
         return new PluginContextImpl(pluginDataDir, descriptor, workspaceManager);
+    }
+
+    private void deleteDirectory(Path dir) throws IOException {
+        try (var stream = Files.walk(dir)) {
+            for (Path path : stream.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 }

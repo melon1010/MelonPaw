@@ -59,7 +59,7 @@ public class PluginRegistry {
     /**
      * Loads a plugin descriptor from a directory.
      */
-    private PluginDescriptor loadDescriptor(Path pluginDir) {
+    public PluginDescriptor loadDescriptor(Path pluginDir) {
         Path descriptorFile = pluginDir.resolve(DESCRIPTOR_FILE);
         if (!Files.exists(descriptorFile)) {
             log.debug("No {} found in {}", DESCRIPTOR_FILE, pluginDir);
@@ -100,6 +100,9 @@ public class PluginRegistry {
             desc.setVersion((String) yamlMap.get("version"));
             desc.setDescription((String) yamlMap.get("description"));
             desc.setMainClass((String) yamlMap.get("main_class"));
+            desc.setAuthor((String) yamlMap.get("author"));
+            desc.setPluginType((String) yamlMap.get("plugin_type"));
+            desc.setFrontendEntry((String) yamlMap.get("frontend_entry"));
             return desc;
         } catch (Exception e) {
             log.error("Failed to parse plugin descriptor from {}: {}", descriptorFile, e.getMessage());

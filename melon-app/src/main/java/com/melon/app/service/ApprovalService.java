@@ -6,12 +6,15 @@ import io.agentscope.core.event.ConfirmResult;
 import io.agentscope.core.message.ToolUseBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import reactor.core.publisher.Mono;
+
+import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
  * Service for managing tool approvals and plans.
@@ -24,6 +27,7 @@ public class ApprovalService {
     private static final Logger log = LoggerFactory.getLogger(ApprovalService.class);
 
     private final ConfigManager configManager;
+    private final AuditLogService auditLogService;
 
     // sessionId -> live approval gate for the paused AgentScope stream
     private final ConcurrentHashMap<String, PendingApprovalSession> pendingApprovalSessions = new ConcurrentHashMap<>();
@@ -31,7 +35,13 @@ public class ApprovalService {
     private final ConcurrentHashMap<String, Map<String, Object>> pendingPlans = new ConcurrentHashMap<>();
 
     public ApprovalService(ConfigManager configManager) {
+        this(configManager, null);
+    }
+
+    @Autowired
+    public ApprovalService(ConfigManager configManager, AuditLogService auditLogService) {
         this.configManager = configManager;
+        this.auditLogService = auditLogService;
     }
 
     /**
@@ -89,9 +99,25 @@ public class ApprovalService {
     }
 
     public boolean decidePendingApproval(String sessionId, String requestId, boolean approved) {
+        return decidePendingApproval(sessionId, requestId, approved, null);
+    }
+
+    public boolean decidePendingApproval(String sessionId, String requestId, boolean approved, String fallbackAgentId) {
         PendingApprovalSession session = pendingApprovalSessions.get(sessionId);
         if (session == null) return false;
-        boolean accepted = session.decide(requestId, approved);
+        ApprovalDecision decision = session.decide(requestId, approved);
+        boolean accepted = decision != null;
+        if (accepted && auditLogService != null) {
+            Map<String, Object> approval = decision.approval() != null ? decision.approval() : Map.of();
+            String agentId = stringValue(approval.getOrDefault("agent_id", fallbackAgentId), "default");
+            String sid = stringValue(approval.getOrDefault("session_id", sessionId), "default");
+            String toolName = stringValue(approval.getOrDefault("tool_name", decision.toolCall().getName()), "unknown");
+            auditLogService.recordApproval(agentId, sid, toolName,
+                    approval.getOrDefault("tool_params", decision.toolCall().getInput()),
+                    approved,
+                    approved ? "approved by user" : "denied by user",
+                    approval);
+        }
         if (session.isDone()) {
             pendingApprovalSessions.remove(sessionId, session);
         }
@@ -156,17 +182,17 @@ public class ApprovalService {
             }
         }
 
-        synchronized boolean decide(String requestId, boolean approved) {
-            if (future.isDone()) return false;
+        synchronized ApprovalDecision decide(String requestId, boolean approved) {
+            if (future.isDone()) return null;
             String id = requestId != null && !requestId.isBlank() ? requestId : firstPendingId();
             ToolUseBlock toolCall = toolCalls.remove(id);
-            approvals.remove(id);
-            if (toolCall == null) return false;
+            Map<String, Object> approval = approvals.remove(id);
+            if (toolCall == null) return null;
             results.add(new ConfirmResult(approved, toolCall));
             if (toolCalls.isEmpty()) {
                 future.complete(List.copyOf(results));
             }
-            return true;
+            return new ApprovalDecision(toolCall, approval);
         }
 
         synchronized Map<String, Object> firstApproval() {
@@ -197,5 +223,8 @@ public class ApprovalService {
         private String firstPendingId() {
             return toolCalls.keySet().stream().findFirst().orElse("");
         }
+    }
+
+    private record ApprovalDecision(ToolUseBlock toolCall, Map<String, Object> approval) {
     }
 }

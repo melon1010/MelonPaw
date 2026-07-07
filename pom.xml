@@ -39,6 +39,7 @@
         <lsp4j.version>0.23.0</lsp4j.version>
         <paho.version>1.2.5</paho.version>
         <zxing.version>3.5.3</zxing.version>
+        <sqlite-jdbc.version>3.45.3.0</sqlite-jdbc.version>
     </properties>
 
     <dependencyManagement>
@@ -112,6 +113,11 @@
                 <groupId>com.google.zxing</groupId>
                 <artifactId>javase</artifactId>
                 <version>${zxing.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.xerial</groupId>
+                <artifactId>sqlite-jdbc</artifactId>
+                <version>${sqlite-jdbc.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

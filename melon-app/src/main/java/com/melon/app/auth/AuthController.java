@@ -40,7 +40,7 @@ public class AuthController {
         return Mono.fromCallable(() -> {
             String password = body != null ? body.get("password") : null;
             if (password == null && !authService.isAuthDisabled()) {
-                return ResponseEntity.badRequest().body(Map.of("error", "password is required"));
+                return ResponseEntity.badRequest().body(Map.of("error", "password is required", "detail", "password is required"));
             }
             AuthService.AuthResult result = authService.login(password);
             if (result.isSuccess()) {
@@ -52,33 +52,54 @@ public class AuthController {
 
     @PostMapping("/register")
     public Mono<ResponseEntity<?>> register(@RequestBody(required = false) Map<String, String> body) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "success", true,
-                "token", "dev-token",
-                "user", Map.of("username", body != null ? body.getOrDefault("username", "default") : "default")
-        )));
+        return Mono.fromCallable(() -> {
+            if (authService.isAuthDisabled()) {
+                return ResponseEntity.ok(authService.login(null).toMap());
+            }
+            return ResponseEntity.status(409).body(Map.of(
+                    "status", "error",
+                    "detail", "Registration is not supported by env-based auth"
+            ));
+        });
     }
 
     @GetMapping("/status")
     public Mono<ResponseEntity<?>> status() {
         return Mono.just(ResponseEntity.ok(Map.of(
-                "authenticated", true,
+                "enabled", !authService.isAuthDisabled(),
+                "has_users", authService.isAuthDisabled() || authService.hasConfiguredPassword(),
+                "authenticated", authService.isAuthDisabled(),
                 "auth_disabled", authService.isAuthDisabled(),
-                "user", Map.of("username", "default")
+                "user", Map.of("username", authService.isAuthDisabled() ? "auth_disabled" : "melon")
         )));
     }
 
     @GetMapping("/verify")
     public Mono<ResponseEntity<?>> verifyGet(@RequestHeader(value = "Authorization", required = false) String authorization) {
-        return Mono.just(ResponseEntity.ok(Map.of("valid", true, "status", "valid")));
+        boolean valid = authService.isAuthDisabled() || authService.verifyToken(bearerToken(authorization));
+        return Mono.just(valid
+                ? ResponseEntity.ok(Map.of("valid", true, "status", "valid"))
+                : ResponseEntity.status(401).body(Map.of("valid", false, "status", "invalid")));
     }
 
     @PostMapping("/update-profile")
-    public Mono<ResponseEntity<?>> updateProfile(@RequestBody(required = false) Map<String, Object> body) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "success", true,
-                "user", body != null ? body : Map.of("username", "default")
-        )));
+    public Mono<ResponseEntity<?>> updateProfile(@RequestHeader(value = "Authorization", required = false) String authorization,
+                                                 @RequestBody(required = false) Map<String, Object> body) {
+        return Mono.fromCallable(() -> {
+            String token = bearerToken(authorization);
+            if (!authService.isAuthDisabled() && !authService.verifyToken(token)) {
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid token"));
+            }
+            String currentPassword = stringValue(body != null ? body.get("current_password") : null);
+            if (!authService.checkPassword(currentPassword)) {
+                return ResponseEntity.status(401).body(Map.of("detail", "Incorrect password"));
+            }
+            if (!stringValue(body != null ? body.get("new_username") : null).isBlank()
+                    || !stringValue(body != null ? body.get("new_password") : null).isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("detail", "Profile updates require env configuration changes"));
+            }
+            return ResponseEntity.ok(Map.of("token", token, "username", authService.isAuthDisabled() ? "auth_disabled" : "melon"));
+        });
     }
 
     /**
@@ -90,11 +111,11 @@ public class AuthController {
     public Mono<ResponseEntity<?>> verify(@RequestBody Map<String, String> body) {
         return Mono.fromCallable(() -> {
             String token = body != null ? body.get("token") : null;
-            boolean valid = authService.verifyToken(token);
+            boolean valid = authService.isAuthDisabled() || authService.verifyToken(token);
             if (valid) {
-                return ResponseEntity.ok(Map.of("status", "valid"));
+                return ResponseEntity.ok(Map.of("valid", true, "status", "valid"));
             }
-            return ResponseEntity.status(401).body(Map.of("status", "invalid"));
+            return ResponseEntity.status(401).body(Map.of("valid", false, "status", "invalid"));
         });
     }
 
@@ -104,11 +125,30 @@ public class AuthController {
      * 请求体: {@code {"token": "..."}}
      */
     @PostMapping("/logout")
-    public Mono<ResponseEntity<?>> logout(@RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity<?>> logout(@RequestHeader(value = "Authorization", required = false) String authorization,
+                                          @RequestBody(required = false) Map<String, String> body) {
         return Mono.fromCallable(() -> {
             String token = body != null ? body.get("token") : null;
+            if (token == null || token.isBlank()) {
+                token = bearerToken(authorization);
+            }
             authService.logout(token);
             return ResponseEntity.ok(Map.of("status", "logged_out"));
         });
+    }
+
+    private String bearerToken(String authorization) {
+        if (authorization == null) {
+            return null;
+        }
+        String value = authorization.trim();
+        if (value.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return value.substring(7).trim();
+        }
+        return value;
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 }

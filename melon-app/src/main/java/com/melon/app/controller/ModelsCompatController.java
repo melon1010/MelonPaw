@@ -296,17 +296,43 @@ public class ModelsCompatController {
 
     @GetMapping("/openrouter/series")
     public Mono<ResponseEntity<?>> openRouterSeries() {
-        return Mono.just(ResponseEntity.ok(Map.of("series", List.of())));
+        return Mono.<ResponseEntity<?>>fromCallable(() -> ResponseEntity.ok(Map.of(
+                "series", openRouterModels(openRouterConfig(null)).stream()
+                        .map(model -> stringValue(model.get("provider")))
+                        .filter(provider -> !provider.isBlank())
+                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new))
+                        .stream()
+                        .toList()
+        ))).subscribeOn(Schedulers.boundedElastic());
     }
 
     @PostMapping("/openrouter/discover-extended")
-    public Mono<ResponseEntity<?>> discoverOpenRouterExtended() {
-        return Mono.just(ResponseEntity.ok(Map.of("models", List.of())));
+    public Mono<ResponseEntity<?>> discoverOpenRouterExtended(@RequestBody(required = false) Map<String, Object> body) {
+        return Mono.<ResponseEntity<?>>fromCallable(() -> {
+            List<Map<String, Object>> models = openRouterModels(openRouterConfig(body));
+            Set<String> providers = models.stream()
+                    .map(model -> stringValue(model.get("provider")))
+                    .filter(provider -> !provider.isBlank())
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "models", models,
+                    "providers", new ArrayList<>(providers),
+                    "total_count", models.size()
+            ));
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     @PostMapping("/openrouter/models/filter")
-    public Mono<ResponseEntity<?>> filterOpenRouterModels() {
-        return Mono.just(ResponseEntity.ok(Map.of("models", List.of())));
+    public Mono<ResponseEntity<?>> filterOpenRouterModels(@RequestBody(required = false) Map<String, Object> body) {
+        return Mono.<ResponseEntity<?>>fromCallable(() -> {
+            List<Map<String, Object>> models = filterOpenRouterModels(openRouterModels(openRouterConfig(null)), body);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "models", models,
+                    "total_count", models.size()
+            ));
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private Map<String, Object> providerPayload(String providerId, List<String> models) {
@@ -482,6 +508,159 @@ public class ModelsCompatController {
         Map<String, Object> model = new LinkedHashMap<>(modelPayload(id));
         model.put("name", name == null || name.isBlank() ? id : name);
         return model;
+    }
+
+    private Map<String, Object> openRouterConfig(Map<String, Object> body) {
+        Map<String, Object> config = providerConfig("openrouter");
+        if (body != null) {
+            body.forEach((key, value) -> {
+                if (value != null) config.put(key, value);
+            });
+        }
+        config.putIfAbsent("base_url", defaultBaseUrl("openrouter"));
+        return config;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> openRouterModels(Map<String, Object> config) {
+        String baseUrl = stringValue(config.getOrDefault("base_url", config.get("default_base_url")));
+        if (baseUrl.isBlank()) baseUrl = defaultBaseUrl("openrouter");
+        String apiKey = stringValue(config.get("api_key"));
+        if (apiKey.isBlank()) apiKey = envApiKey("openrouter");
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$", "") + "/models"))
+                    .timeout(Duration.ofSeconds(15))
+                    .GET()
+                    .header("Accept", "application/json");
+            applyDiscoveryAuth(builder, "openrouter", apiKey, config);
+            applyCustomHeaders(builder, config.get("custom_headers"));
+            HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                Object parsed = JsonUtils.getMapper().readValue(response.body(), Object.class);
+                Object data = parsed instanceof Map<?, ?> map ? map.get("data") : parsed;
+                if (data instanceof List<?> list) {
+                    List<Map<String, Object>> result = new ArrayList<>();
+                    for (Object raw : list) {
+                        if (raw instanceof Map<?, ?> model) {
+                            result.add(openRouterModelPayload(model));
+                        }
+                    }
+                    if (!result.isEmpty()) return result;
+                }
+            }
+        } catch (Exception ignored) {
+            // Local/default fallback below keeps the model manager usable offline.
+        }
+        return providerManager.listModels("openrouter").stream()
+                .map(id -> openRouterFallbackPayload(id, id))
+                .toList();
+    }
+
+    private Map<String, Object> openRouterModelPayload(Map<?, ?> raw) {
+        String id = stringValue(raw.get("id"));
+        String name = stringValue(firstPresent(raw, "name", "id"));
+        Map<String, Object> architecture = mapValue(raw.get("architecture"));
+        List<String> input = stringList(architecture.get("input_modalities"));
+        List<String> output = stringList(architecture.get("output_modalities"));
+        Map<String, Object> pricing = mapValue(raw.get("pricing"));
+        boolean free = id.endsWith(":free")
+                || (pricing.containsKey("prompt") && pricing.containsKey("completion")
+                && numberValue(pricing.get("prompt")) == 0.0 && numberValue(pricing.get("completion")) == 0.0);
+
+        Map<String, Object> model = new LinkedHashMap<>();
+        model.put("id", id);
+        model.put("name", name.isBlank() ? id : name);
+        model.put("provider", openRouterProvider(id, raw));
+        model.put("supports_multimodal", input.stream().anyMatch(value -> !"text".equalsIgnoreCase(value)));
+        model.put("supports_image", input.contains("image"));
+        model.put("supports_video", input.contains("video"));
+        model.put("probe_source", "openrouter");
+        model.put("is_free", free);
+        model.put("input_modalities", input);
+        model.put("output_modalities", output);
+        model.put("pricing", pricing);
+        return model;
+    }
+
+    private Map<String, Object> openRouterFallbackPayload(String id, String name) {
+        Map<String, Object> model = new LinkedHashMap<>();
+        model.put("id", id);
+        model.put("name", name == null || name.isBlank() ? id : name);
+        model.put("provider", openRouterProvider(id, Map.of()));
+        model.put("supports_multimodal", false);
+        model.put("supports_image", false);
+        model.put("supports_video", false);
+        model.put("probe_source", "configured");
+        model.put("is_free", id.endsWith(":free"));
+        model.put("input_modalities", List.of("text"));
+        model.put("output_modalities", List.of("text"));
+        model.put("pricing", Map.of());
+        return model;
+    }
+
+    private List<Map<String, Object>> filterOpenRouterModels(List<Map<String, Object>> models, Map<String, Object> body) {
+        Set<String> providers = stringSet(body != null ? body.get("providers") : null);
+        Set<String> inputModalities = stringSet(body != null ? body.get("input_modalities") : null);
+        Set<String> outputModalities = stringSet(body != null ? body.get("output_modalities") : null);
+        boolean freeOnly = Boolean.TRUE.equals(body != null ? body.get("is_free") : null);
+        Double maxPromptPrice = body != null ? nullableNumber(body.get("max_prompt_price")) : null;
+        return models.stream()
+                .filter(model -> providers.isEmpty() || providers.contains(stringValue(model.get("provider"))))
+                .filter(model -> inputModalities.isEmpty() || stringSet(model.get("input_modalities")).containsAll(inputModalities))
+                .filter(model -> outputModalities.isEmpty() || stringSet(model.get("output_modalities")).containsAll(outputModalities))
+                .filter(model -> !freeOnly || Boolean.TRUE.equals(model.get("is_free")))
+                .filter(model -> maxPromptPrice == null || numberValue(mapValue(model.get("pricing")).get("prompt")) <= maxPromptPrice)
+                .toList();
+    }
+
+    private String openRouterProvider(String id, Map<?, ?> raw) {
+        Object topProvider = raw.get("top_provider");
+        if (topProvider instanceof Map<?, ?> map) {
+            String name = stringValue(firstPresent(map, "name", "provider"));
+            if (!name.isBlank()) return name;
+        }
+        int slash = id.indexOf('/');
+        return slash > 0 ? id.substring(0, slash) : "openrouter";
+    }
+
+    private Map<String, Object> mapValue(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) {
+            return new LinkedHashMap<>();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        map.forEach((key, value) -> {
+            if (key != null) result.put(String.valueOf(key), value);
+        });
+        return result;
+    }
+
+    private List<String> stringList(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream().map(String::valueOf).filter(value -> !value.isBlank()).toList();
+    }
+
+    private Set<String> stringSet(Object raw) {
+        return new LinkedHashSet<>(stringList(raw));
+    }
+
+    private double numberValue(Object value) {
+        if (value instanceof Number number) return number.doubleValue();
+        try {
+            return value == null || String.valueOf(value).isBlank() ? 0.0 : Double.parseDouble(String.valueOf(value));
+        } catch (Exception ignored) {
+            return 0.0;
+        }
+    }
+
+    private Double nullableNumber(Object value) {
+        if (value instanceof Number number) return number.doubleValue();
+        try {
+            return value == null || String.valueOf(value).isBlank() ? null : Double.parseDouble(String.valueOf(value));
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String defaultBaseUrl(String providerId) {

@@ -12,6 +12,9 @@ public class PluginDescriptor {
     private String version;
     private String description;
     private String mainClass;
+    private String author;
+    private String pluginType;
+    private String frontendEntry;
     private Path pluginDir;
 
     public PluginDescriptor() {
@@ -61,6 +64,30 @@ public class PluginDescriptor {
 
     public void setMainClass(String mainClass) {
         this.mainClass = mainClass;
+    }
+
+    public String getAuthor() {
+        return author;
+    }
+
+    public void setAuthor(String author) {
+        this.author = author;
+    }
+
+    public String getPluginType() {
+        return pluginType;
+    }
+
+    public void setPluginType(String pluginType) {
+        this.pluginType = pluginType;
+    }
+
+    public String getFrontendEntry() {
+        return frontendEntry;
+    }
+
+    public void setFrontendEntry(String frontendEntry) {
+        this.frontendEntry = frontendEntry;
     }
 
     public Path getPluginDir() {

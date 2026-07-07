@@ -1,11 +1,13 @@
 package com.melon.app.runner;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.melon.app.service.HistoryStore;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -34,9 +36,16 @@ public class ChatManager {
             "You are in the middle of a conversation that has been summarized.";
 
     private final ConfigManager configManager;
+    private final HistoryStore historyStore;
 
     public ChatManager(ConfigManager configManager) {
+        this(configManager, null);
+    }
+
+    @Autowired
+    public ChatManager(ConfigManager configManager, HistoryStore historyStore) {
         this.configManager = configManager;
+        this.historyStore = historyStore;
     }
 
     public List<ChatSpec> list(String agentId, String userId, String channel) {
@@ -119,6 +128,9 @@ public class ChatManager {
         normalizeState(agentId, normalizedState);
         Map<String, Object> agent = new LinkedHashMap<>();
         agent.put("state", normalizedState);
+        if (historyStore != null) {
+            historyStore.appendSession(agentId, sessionId, normalizedState);
+        }
         agent.put("scroll", scrollIndex(agentId, sessionId, normalizedState));
         JsonUtils.save(sessionFile(agentId, channel, userId, sessionId), Map.of("agent", agent));
     }
@@ -461,6 +473,10 @@ public class ChatManager {
     }
 
     private Map<String, Object> scrollIndex(String agentId, String sessionId, Map<String, Object> state) {
+        if (historyStore != null) {
+            Map<String, Object> stored = historyStore.scrollIndex(agentId, sessionId);
+            if (!stored.isEmpty()) return stored;
+        }
         List<String> persistedIds = new ArrayList<>();
         List<String> persistedTcids = new ArrayList<>();
         Map<String, Object> seqById = new LinkedHashMap<>();

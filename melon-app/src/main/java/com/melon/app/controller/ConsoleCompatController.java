@@ -28,6 +28,8 @@ import org.springframework.http.codec.multipart.FilePart;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -233,14 +235,85 @@ public class ConsoleCompatController {
 
     @GetMapping("/debug/backend-logs")
     public Mono<ResponseEntity<?>> backendLogs(@RequestParam(defaultValue = "200") int lines) {
-        return Mono.just(ResponseEntity.ok(Map.of(
-                "path", "",
-                "exists", false,
-                "lines", Math.max(0, lines),
-                "updated_at", 0,
-                "size", 0,
-                "content", ""
-        )));
+        return Mono.fromCallable(() -> ResponseEntity.ok(backendLogsPayload(lines)));
+    }
+
+    private Map<String, Object> backendLogsPayload(int lines) {
+        int limit = Math.min(Math.max(lines, 0), 5000);
+        Path path = backendLogPath();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("path", path.toString());
+        payload.put("lines", limit);
+        payload.put("exists", Files.isRegularFile(path));
+        payload.put("updated_at", null);
+        payload.put("size", 0L);
+        payload.put("content", "");
+        if (!Files.isRegularFile(path)) {
+            return payload;
+        }
+        try {
+            payload.put("updated_at", Files.getLastModifiedTime(path).toMillis() / 1000);
+            payload.put("size", Files.size(path));
+            payload.put("content", tailLog(path, limit));
+        } catch (Exception e) {
+            payload.put("content", "(Error reading log: " + e.getMessage() + ")");
+        }
+        return payload;
+    }
+
+    private Path backendLogPath() {
+        String configured = firstNonBlank(
+                System.getProperty("logging.file.name"),
+                System.getenv("MELON_LOG_FILE"),
+                System.getenv("LOG_FILE")
+        );
+        Path path = configured != null ? Path.of(configured) : Path.of("logs", "melon.log");
+        if (!path.isAbsolute()) {
+            path = Path.of(System.getProperty("user.dir")).resolve(path);
+        }
+        return path.toAbsolutePath().normalize();
+    }
+
+    private String tailLog(Path path, int lines) throws Exception {
+        if (lines == 0) {
+            return "";
+        }
+        long size = Files.size(path);
+        if (size == 0) {
+            return "";
+        }
+        int maxBytes = 512 * 1024;
+        long offset = Math.max(0, size - maxBytes);
+        byte[] buffer = new byte[(int) (size - offset)];
+        try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "r")) {
+            file.seek(offset);
+            file.readFully(buffer);
+        }
+        String content = new String(buffer, StandardCharsets.UTF_8);
+        if (offset > 0) {
+            int firstNewline = content.indexOf('\n');
+            content = firstNewline >= 0 ? content.substring(firstNewline + 1) : "";
+        }
+        String[] all = content.split("\\R", -1);
+        int end = all.length;
+        if (end > 0 && all[end - 1].isEmpty()) {
+            end--;
+        }
+        int start = Math.max(0, end - lines);
+        List<String> selected = new ArrayList<>();
+        for (int i = start; i < end; i++) {
+            selected.add(all[i]);
+        }
+        return String.join("\n", selected);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

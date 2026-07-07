@@ -44,7 +44,8 @@ public class ProviderManager {
         Map.entry("anthropic", "ANTHROPIC_API_KEY"),
         Map.entry("gemini", "GEMINI_API_KEY"),
         Map.entry("ollama", "OLLAMA_API_KEY"),
-        Map.entry("deepseek", "DEEPSEEK_API_KEY")
+        Map.entry("deepseek", "DEEPSEEK_API_KEY"),
+        Map.entry("openrouter", "OPENROUTER_API_KEY")
     );
 
     /** Default models per provider */
@@ -54,7 +55,8 @@ public class ProviderManager {
         Map.entry("anthropic", List.of("claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229")),
         Map.entry("gemini", List.of("gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash")),
         Map.entry("ollama", List.of("llama3.1", "qwen2.5", "deepseek-r1", "mistral", "phi-3")),
-        Map.entry("deepseek", List.of("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro"))
+        Map.entry("deepseek", List.of("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro")),
+        Map.entry("openrouter", List.of("openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5"))
     );
 
     public void init(MelonConfig config) {
@@ -228,6 +230,13 @@ public class ProviderManager {
                     .stream(true)
                     .generateOptions(generateOptions(provider, model, true, Duration.ofMinutes(5)))
                     .build();
+            case "openrouter" -> OpenAIChatModel.builder()
+                    .apiKey(requireApiKey(provider, "OPENROUTER_API_KEY", resolveModel(provider, model)))
+                    .baseUrl(valueOr(configuredValue(provider, "base_url"), "https://openrouter.ai/api/v1"))
+                    .modelName(model)
+                    .stream(true)
+                    .generateOptions(generateOptions(provider, model, true, Duration.ofMinutes(5)))
+                    .build();
             case "anthropic" -> AnthropicChatModel.builder()
                     .apiKey(requireApiKey(provider, "ANTHROPIC_API_KEY", resolveModel(provider, model)))
                     .baseUrl(blankToNull(configuredValue(provider, "base_url")))
@@ -301,6 +310,7 @@ public class ProviderManager {
         ModelRegistry.registerFactory("qwen.+", modelId -> createModel("dashscope", modelId));
         ModelRegistry.registerFactory("openai:(.+)", modelId -> createModel("openai", modelId.substring("openai:".length())));
         ModelRegistry.registerFactory("deepseek:(.+)", modelId -> createModel("deepseek", modelId.substring("deepseek:".length())));
+        ModelRegistry.registerFactory("openrouter:(.+)", modelId -> createModel("openrouter", modelId.substring("openrouter:".length())));
         ModelRegistry.registerFactory("anthropic:(.+)", modelId -> createModel("anthropic", modelId.substring("anthropic:".length())));
         ModelRegistry.registerFactory("gemini:(.+)", modelId -> createModel("gemini", modelId.substring("gemini:".length())));
         ModelRegistry.registerFactory("([A-Za-z0-9._-]+):(.+)", this::createModel);
