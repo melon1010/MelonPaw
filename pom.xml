@@ -82,7 +82,7 @@
         <lsp4j.version>0.23.0</lsp4j.version>
         <paho.version>1.2.5</paho.version>
         <zxing.version>3.5.3</zxing.version>
-        <sqlite-jdbc.version>3.45.3.0</sqlite-jdbc.version>
+        <sqlite-jdbc.version>3.53.2.0</sqlite-jdbc.version>
         <maven-checkstyle-plugin.version>3.4.0</maven-checkstyle-plugin.version>
         <maven-enforcer-plugin.version>3.5.0</maven-enforcer-plugin.version>
     </properties>
