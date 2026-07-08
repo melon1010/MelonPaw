@@ -1,7 +1,7 @@
 # melonPaw-Java
 
 > AI Agent 平台，基于 **AgentScope 2.0 + Spring Boot 3 (WebFlux) + Java 17** 实现。
-> 本项目是 [melonPaw](https://github.com/melon1010/melonPaw-java) 的 Java 后端版本，复刻自成熟的 Python 原型，提供 HTTP API、CLI 与前端控制台。
+> 本项目是 [QwenPaw](https://github.com/agentscope-ai/QwenPaw) 的 Java 后端版本，复刻自成熟的 Python 原型，提供 HTTP API、CLI 与前端控制台。
 
 ---
 
@@ -71,10 +71,11 @@ melon-plugin-api  ←──  melon-core  ←──  melon-tools
 
 ### 环境要求
 
-| 依赖 | 版本 |
-|------|------|
-| JDK | 17+ |
-| Maven | 3.8+ |
+
+| 依赖    | 版本                |
+| ------- | ------------------- |
+| JDK     | 17+                 |
+| Maven   | 3.8+                |
 | Node.js | 18+（仅前端控制台） |
 
 ### 1. 克隆并构建
@@ -144,15 +145,17 @@ Agent、模型、工具、技能等运行时配置保存在 `~/.melonAI/config.y
 
 ### Agent 模板
 
-| 模板 | 模型 | 工具范围 | 用途 |
-|------|------|---------|------|
-| `default` | qwen-plus | 全部工具 + 浏览器 | 标准全能 Agent |
-| `local` | qwen-turbo | 仅文件/Shell | 本地快速任务，无网络 |
-| `qa` | qwen-plus | 文件/Shell + 多 Agent | 代码审查与测试 |
+
+| 模板      | 模型       | 工具范围              | 用途                 |
+| --------- | ---------- | --------------------- | -------------------- |
+| `default` | qwen-plus  | 全部工具 + 浏览器     | 标准全能 Agent       |
+| `local`   | qwen-turbo | 仅文件/Shell          | 本地快速任务，无网络 |
+| `qa`      | qwen-plus  | 文件/Shell + 多 Agent | 代码审查与测试       |
 
 ### 模型 ID 格式
 
 `<provider>:<model>`，例如：
+
 - `dashscope:qwen-plus`
 - `openai:gpt-4o`
 - `anthropic:claude-3-5-sonnet-20241022`
@@ -164,17 +167,18 @@ Agent、模型、工具、技能等运行时配置保存在 `~/.melonAI/config.y
 
 ## 📡 主要 API
 
-| 路径 | 说明 |
-|------|------|
-| `POST /api/console/chat` | 流式聊天（SSE） |
-| `GET  /api/agents` | Agent 列表 |
-| `GET  /api/sessions` | 会话列表 |
-| `POST /api/plan/*` | 计划模式 |
-| `POST /api/approval/*` | 审批确认 |
+
+| 路径                                  | 说明             |
+| ------------------------------------- | ---------------- |
+| `POST /api/console/chat`              | 流式聊天（SSE）  |
+| `GET  /api/agents`                    | Agent 列表       |
+| `GET  /api/sessions`                  | 会话列表         |
+| `POST /api/plan/*`                    | 计划模式         |
+| `POST /api/approval/*`                | 审批确认         |
 | `GET  /api/providers` / `/api/models` | 模型供应商与模型 |
-| `GET  /api/workspace` | 工作区信息 |
-| `POST /api/backup/*` | 备份/恢复 |
-| `GET  /api/crons` | 定时任务 |
+| `GET  /api/workspace`                 | 工作区信息       |
+| `POST /api/backup/*`                  | 备份/恢复        |
+| `GET  /api/crons`                     | 定时任务         |
 
 > 完整接口见各 Controller 的 `@RequestMapping`。前端控制台使用一套兼容路由（`*CompatController`）。
 
@@ -262,15 +266,16 @@ public class MyPlugin implements MelonPlugin {
 
 ## 📦 技术栈
 
-| 层 | 技术 |
-|----|------|
-| 运行时 | Java 17、Spring Boot 3.3.0 |
-| Agent 框架 | AgentScope 2.0（harness + core） |
-| Web | Spring WebFlux（响应式）、SSE |
-| CLI | Picocli 4.7.6 |
-| 浏览器自动化 | Playwright 1.45 |
-| 代码智能 | LSP4j 0.23（LSP）、ast-grep（AST 搜索） |
-| 前端 | React、TypeScript、Vite |
+
+| 层           | 技术                                    |
+| ------------ | --------------------------------------- |
+| 运行时       | Java 17、Spring Boot 3.3.0              |
+| Agent 框架   | AgentScope 2.0（harness + core）        |
+| Web          | Spring WebFlux（响应式）、SSE           |
+| CLI          | Picocli 4.7.6                           |
+| 浏览器自动化 | Playwright 1.45                         |
+| 代码智能     | LSP4j 0.23（LSP）、ast-grep（AST 搜索） |
+| 前端         | React、TypeScript、Vite                 |
 
 ---
 
