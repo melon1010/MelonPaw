@@ -2,7 +2,7 @@
 
 This directory is a copy of the QwenPaw frontend from:
 
-`/Users/melon/IdeaWorkSpace/Github/QwenPaw/console`
+`https://github.com/agentscope-ai/QwenPaw/tree/main/console`
 
 It is kept in this Java project so the frontend can be started next to the Spring Boot backend and pointed at the Java-compatible APIs.
 

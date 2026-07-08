@@ -2,7 +2,7 @@
 
 ## Background
 
-This Java project is intended to reproduce the Python-side backend and agent capabilities from `/Users/melon/IdeaWorkSpace/Github/melonPaw` using AgentScope 2.0 and Spring Boot.
+This Java project is intended to reproduce the Python-side backend and agent capabilities from `https://github.com/agentscope-ai/QwenPaw` using AgentScope 2.0 and Spring Boot.
 
 The current Java codebase already has the broad module shape:
 
