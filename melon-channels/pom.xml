@@ -11,8 +11,8 @@
     </parent>
 
     <artifactId>melon-channels</artifactId>
-    <name>Melon Channels</name>
-    <description>QwenPaw-compatible channel management and adapters</description>
+    <name>melonPaw Channels</name>
+    <description>melonPaw-compatible channel management and adapters</description>
 
     <dependencies>
         <dependency>

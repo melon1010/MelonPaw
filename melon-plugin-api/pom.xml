@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>melon-plugin-api</artifactId>
-    <name>Melon Plugin API</name>
+    <name>melonPaw Plugin API</name>
     <description>SPI interfaces for third-party plugins</description>
 
     <dependencies>

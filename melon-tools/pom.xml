@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>melon-tools</artifactId>
-    <name>Melon Tools</name>
+    <name>melonPaw Tools</name>
     <description>20+ built-in tool implementations</description>
 
     <dependencies>

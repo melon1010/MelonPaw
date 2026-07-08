@@ -1,8 +1,8 @@
-# QwenPaw Java Capability Parity Plan
+# melonPaw Java Capability Parity Plan
 
 ## Background
 
-This Java project is intended to reproduce the Python-side backend and agent capabilities from `/Users/melon/IdeaWorkSpace/Github/QwenPaw` using AgentScope 2.0 and Spring Boot.
+This Java project is intended to reproduce the Python-side backend and agent capabilities from `/Users/melon/IdeaWorkSpace/Github/melonPaw` using AgentScope 2.0 and Spring Boot.
 
 The current Java codebase already has the broad module shape:
 
@@ -19,7 +19,7 @@ However, several important Python capabilities are still missing or only impleme
 The following Python-side capabilities are intentionally not required for the Java project at this stage:
 
 - Channel system: DingTalk, Feishu, WeChat, QQ, Telegram, Slack, Discord, Mattermost, Matrix, MQTT, iMessage, WeCom, voice/SIP channel integrations, channel cards, QR login, channel access control.
-- CLI/TUI product surface: Python `qwenpaw` TUI, rich CLI parity, daemon commands, desktop commands, update commands, installer commands.
+- CLI/TUI product surface: Python `melonpaw` TUI, rich CLI parity, daemon commands, desktop commands, update commands, installer commands.
 - Desktop packaging: Tauri app, PyInstaller packaging, platform installer scripts, desktop auto-update.
 - Frontend console parity: the Java backend may expose compatible APIs where useful, but full console/Tauri feature parity is not a goal in this phase.
 
@@ -50,7 +50,7 @@ Java has many `ToolBase` classes under `melon-tools`, but `MelonAgentFactory` do
 - memory tools,
 - skill-related tools.
 
-Without this, the agent may be able to chat but cannot reliably execute the operational capabilities expected from QwenPaw.
+Without this, the agent may be able to chat but cannot reliably execute the operational capabilities expected from melonPaw.
 
 ### 2. Approval and ToolGuard Are Not Wired Into Execution
 

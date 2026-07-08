@@ -21,7 +21,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * QwenPaw frontend-compatible coding project API.
+ * melonPaw frontend-compatible coding project API.
  */
 @RestController
 @RequestMapping("/api/workspace/coding-project")

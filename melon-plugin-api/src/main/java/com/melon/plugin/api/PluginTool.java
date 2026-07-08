@@ -1,10 +1,10 @@
 package com.melon.plugin.api;
 
-import reactor.core.publisher.Mono;
 import java.util.Map;
 
-import io.agentscope.core.tool.ToolCallParam;
 import io.agentscope.core.message.ToolResultBlock;
+import io.agentscope.core.tool.ToolCallParam;
+import reactor.core.publisher.Mono;
 
 /**
  * 插件工具接口。
@@ -16,27 +16,31 @@ public interface PluginTool {
      * 工具名称
      */
     String getName();
-    
+
     /**
      * 工具描述（展示给 LLM）
      */
     String getDescription();
-    
+
     /**
      * 工具 JSON Schema 参数
      */
     Map<String, Object> getParameters();
-    
+
     /**
      * 是否只读（无副作用）
      */
-    default boolean isReadOnly() { return false; }
-    
+    default boolean isReadOnly() {
+        return false;
+    }
+
     /**
      * 是否并发安全
      */
-    default boolean isConcurrencySafe() { return false; }
-    
+    default boolean isConcurrencySafe() {
+        return false;
+    }
+
     /**
      * 执行工具
      */

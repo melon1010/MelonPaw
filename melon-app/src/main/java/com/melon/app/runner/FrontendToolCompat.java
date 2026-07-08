@@ -9,7 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Normalizes AgentScope tool names/arguments to the shape the copied QwenPaw
+ * Normalizes AgentScope tool names/arguments to the shape the copied melonPaw
  * frontend tool cards expect.
  */
 public final class FrontendToolCompat {

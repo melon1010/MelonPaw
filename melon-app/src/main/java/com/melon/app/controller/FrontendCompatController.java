@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * Compatibility endpoints for QwenPaw frontend pages whose deep backend
+ * Compatibility endpoints for melonPaw frontend pages whose deep backend
  * behavior is intentionally not implemented yet.
  */
 @RestController
@@ -641,7 +641,7 @@ public class FrontendCompatController {
     public Mono<ResponseEntity<?>> marketProviders() {
         return Mono.just(ResponseEntity.ok(List.of(Map.of(
                 "key", "qwenpaw",
-                "label", "QwenPaw Local",
+                "label", "melonPaw Local",
                 "available", true,
                 "reason", null,
                 "supports_browse", true
@@ -741,7 +741,7 @@ public class FrontendCompatController {
 
     @GetMapping("/")
     public Mono<ResponseEntity<?>> root() {
-        return Mono.just(ResponseEntity.ok(Map.of("ok", true, "service", "qwenpaw-java")));
+        return Mono.just(ResponseEntity.ok(Map.of("ok", true, "service", "melonpaw-java")));
     }
 
     @PostMapping("/commands/check")

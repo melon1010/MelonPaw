@@ -12,7 +12,7 @@ import java.util.*;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * QwenPaw console-compatible chat metadata endpoints.
+ * melonPaw console-compatible chat metadata endpoints.
  */
 @RestController
 @RequestMapping("/api/chats")

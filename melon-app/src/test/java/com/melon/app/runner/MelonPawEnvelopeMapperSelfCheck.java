@@ -21,16 +21,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public final class QwenPawEnvelopeMapperSelfCheck {
+public final class MelonPawEnvelopeMapperSelfCheck {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
 
-    private QwenPawEnvelopeMapperSelfCheck() {
+    private MelonPawEnvelopeMapperSelfCheck() {
     }
 
     public static void main(String[] args) throws Exception {
-        QwenPawEnvelopeMapper mapper = new QwenPawEnvelopeMapper("s1");
+        MelonPawEnvelopeMapper mapper = new MelonPawEnvelopeMapper("s1");
         List<Map<String, Object>> payloads = new ArrayList<>();
         collect(payloads, mapper.start());
         collect(payloads, mapper.translate(new ThinkingBlockStartEvent("r1", "think1")));
@@ -51,7 +51,7 @@ public final class QwenPawEnvelopeMapperSelfCheck {
         collect(payloads, mapper.finish());
         verifyCompletedOutput(payloads, 4);
 
-        QwenPawEnvelopeMapper missingBlockIds = new QwenPawEnvelopeMapper("s2");
+        MelonPawEnvelopeMapper missingBlockIds = new MelonPawEnvelopeMapper("s2");
         List<Map<String, Object>> missingPayloads = new ArrayList<>();
         collect(missingPayloads, missingBlockIds.start());
         collect(missingPayloads, missingBlockIds.translate(new ThinkingBlockStartEvent("r2", null)));

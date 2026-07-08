@@ -169,7 +169,7 @@ public class HttpChannelAdapter extends BasicChannelAdapter {
     private Map<String, Object> dingtalkQrcode() {
         try {
             String base = "https://oapi.dingtalk.com";
-            HttpResponse<String> init = post(base + "/app/registration/init", Map.of(), Map.of("source", "QWENPAW"), Map.of());
+            HttpResponse<String> init = post(base + "/app/registration/init", Map.of(), Map.of("source", "MELONPAW"), Map.of());
             Map<String, Object> initBody = JsonUtils.fromJson(init.body(), Map.class);
             String nonce = initBody != null ? stringValue(initBody.get("nonce")) : "";
             if (nonce.isBlank()) return failedQrcode("DingTalk returned empty nonce: " + init.body());
@@ -451,7 +451,7 @@ public class HttpChannelAdapter extends BasicChannelAdapter {
         if (url.isBlank()) url = first(config, "webhook_url", "outgoing_webhook", "reply_url");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("msgtype", "markdown");
-        body.put("markdown", Map.of("title", "QwenPaw", "text", message.getText()));
+        body.put("markdown", Map.of("title", "melonPaw", "text", message.getText()));
         return post(url, Map.of(), body, config);
     }
 

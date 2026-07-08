@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>melon-coding-mode</artifactId>
-    <name>Melon Coding Mode</name>
+    <name>melonPaw Coding Mode</name>
     <description>LSP and AST search tools for coding workflows</description>
 
     <dependencies>

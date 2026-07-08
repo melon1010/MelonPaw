@@ -9,8 +9,51 @@
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>Melon Java</name>
-    <description>Melon Java implementation based on AgentScope 2.0 + Spring Boot</description>
+    <name>melonPaw</name>
+    <description>melonPaw Java implementation based on AgentScope 2.0 + Spring Boot</description>
+    <url>https://github.com/melon1010/melonPaw-java</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <organization>
+        <name>melonPaw-Java contributors</name>
+        <url>https://github.com/melon1010/melonPaw-java</url>
+    </organization>
+
+    <developers>
+        <developer>
+            <id>contributors</id>
+            <name>melonPaw-Java contributors</name>
+            <organization>melonPaw-Java</organization>
+            <roles>
+                <role>developer</role>
+            </roles>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/melon1010/melonPaw-java.git</connection>
+        <developerConnection>scm:git:https://github.com/melon1010/melonPaw-java.git</developerConnection>
+        <url>https://github.com/melon1010/melonPaw-java</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/melon1010/melonPaw-java/issues</url>
+    </issueManagement>
+
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>https://github.com/melon1010/melonPaw-java/actions</url>
+    </ciManagement>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
@@ -40,6 +83,8 @@
         <paho.version>1.2.5</paho.version>
         <zxing.version>3.5.3</zxing.version>
         <sqlite-jdbc.version>3.45.3.0</sqlite-jdbc.version>
+        <maven-checkstyle-plugin.version>3.4.0</maven-checkstyle-plugin.version>
+        <maven-enforcer-plugin.version>3.5.0</maven-enforcer-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -137,6 +182,50 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <profiles>
+        <profile>
+            <id>quality</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <version>${maven-enforcer-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>enforce-java-and-maven</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireJavaVersion>
+                                            <version>[17,)</version>
+                                        </requireJavaVersion>
+                                        <requireMavenVersion>
+                                            <version>[3.8,)</version>
+                                        </requireMavenVersion>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-checkstyle-plugin</artifactId>
+                        <version>${maven-checkstyle-plugin.version}</version>
+                        <configuration>
+                            <configLocation>checkstyle.xml</configLocation>
+                            <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                            <consoleOutput>true</consoleOutput>
+                            <failsOnError>true</failsOnError>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <repositories>
         <repository>

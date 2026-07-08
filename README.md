@@ -1,7 +1,7 @@
-# QwenPaw-Java
+# melonPaw-Java
 
 > AI Agent 平台，基于 **AgentScope 2.0 + Spring Boot 3 (WebFlux) + Java 17** 实现。
-> 本项目是 [QwenPaw](https://github.com/melon1010/QwenPaw-java) 的 Java 后端版本，复刻自成熟的 Python 原型，提供 HTTP API、CLI 与前端控制台。
+> 本项目是 [melonPaw](https://github.com/melon1010/melonPaw-java) 的 Java 后端版本，复刻自成熟的 Python 原型，提供 HTTP API、CLI 与前端控制台。
 
 ---
 
@@ -24,7 +24,7 @@
 ## 🏗️ 项目结构
 
 ```
-QwenPaw-java/
+melonPaw-java/
 ├── melon-plugin-api/     # 插件 SPI 接口（MelonPlugin, PluginContext, PluginTool）
 ├── melon-core/           # 核心：Agent 运行时、中间件、配置、Provider、计划、安全
 │   ├── agent/            #   Agent 模板、多 Agent 管理、工作区、消息处理工具
@@ -80,8 +80,8 @@ melon-plugin-api  ←──  melon-core  ←──  melon-tools
 ### 1. 克隆并构建
 
 ```bash
-git clone https://github.com/melon1010/QwenPaw-java.git
-cd QwenPaw-java
+git clone https://github.com/melon1010/melonPaw-java.git
+cd melonPaw-java
 mvn clean install -DskipTests
 ```
 
@@ -208,6 +208,24 @@ mvn -pl melon-app exec:java -Dexec.mainClass="com.melon.app.runner.ChatManagerSe
 
 涵盖：聊天会话隔离、会话影子落盘、大工具输出溢出、上下文压缩摘要、遗留数据迁移等。
 
+### 代码规范与质量检查
+
+建议新代码遵循 [Google Java Style Guide](https://google.github.io/styleguide/javaguide.html) 的命名、导入与结构约定，并结合 Spring 项目常见实践：
+
+- Java 17、4 空格缩进、UTF-8、LF 换行。
+- 优先构造器注入，避免新增字段注入。
+- Controller 保持薄层，业务逻辑进入 Service/Core 层。
+- 文件、Shell、浏览器自动化、插件/技能加载等敏感能力必须经过现有安全边界。
+- 老代码采用增量收敛，不建议把格式化和行为变更混在同一个 PR。
+
+可选质量检查：
+
+```bash
+mvn -Pquality checkstyle:check
+```
+
+更多约定见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [开源发布检查清单](docs/OPEN_SOURCE_CHECKLIST.md)。
+
 ---
 
 ## 🧩 插件开发
@@ -258,7 +276,9 @@ public class MyPlugin implements MelonPlugin {
 
 ## 📄 许可证
 
-本项目仅供学习与研究用途。
+本项目采用 [Apache License 2.0](LICENSE)。
+
+公开发布前请确认 `NOTICE`、`pom.xml`、README 中的仓库地址、版权主体和第三方资源许可证均准确无误。
 
 ---
 

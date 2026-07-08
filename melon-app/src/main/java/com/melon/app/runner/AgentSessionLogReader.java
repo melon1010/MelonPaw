@@ -23,7 +23,7 @@ import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
  * Reads AgentScope session logs and returns the message shape the copied
- * QwenPaw frontend already understands.
+ * melonPaw frontend already understands.
  */
 @Component
 public class AgentSessionLogReader {

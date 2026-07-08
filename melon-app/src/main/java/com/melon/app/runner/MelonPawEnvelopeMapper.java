@@ -36,14 +36,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * AgentScope Java events -> QwenPaw Python-compatible streaming envelope.
+ * AgentScope Java events -> melonPaw Python-compatible streaming envelope.
  *
  * <p>This mirrors qwenpaw.runtime.envelope.Envelope closely enough for the
  * copied frontend's @agentscope-ai/chat renderer: messages are split by text,
  * reasoning, tool call and tool result, and tool payloads keep the Python
  * FunctionCall / FunctionCallOutput data shape.</p>
  */
-public class QwenPawEnvelopeMapper {
+public class MelonPawEnvelopeMapper {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String TURN_USAGE_META_KEY = "qwenpaw_turn_usage";
@@ -67,7 +67,7 @@ public class QwenPawEnvelopeMapper {
     private Map<String, Object> usage;
     private boolean finalized;
 
-    public QwenPawEnvelopeMapper(String sessionId) {
+    public MelonPawEnvelopeMapper(String sessionId) {
         this.sessionId = sessionId != null ? sessionId : "";
     }
 

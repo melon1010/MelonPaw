@@ -758,7 +758,7 @@ public class WorkspaceController {
     public Mono<ResponseEntity<?>> downloadWorkspace(@RequestHeader(value = "X-Agent-Id", required = false) String agentId) {
         return Mono.fromCallable(() -> {
             Path workspace = resolveWorkspace(agentId);
-            Path zip = Files.createTempFile("qwenpaw-workspace-", ".zip");
+            Path zip = Files.createTempFile("melonpaw-workspace-", ".zip");
             try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zip))) {
                 if (Files.exists(workspace)) {
                     try (var stream = Files.walk(workspace)) {
@@ -772,7 +772,7 @@ public class WorkspaceController {
                 }
             }
             return ResponseEntity.ok()
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"qwenpaw-workspace.zip\"")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"melonpaw-workspace.zip\"")
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .body(new ByteArrayResource(Files.readAllBytes(zip)));
         });

@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>melon-core</artifactId>
-    <name>Melon Core</name>
+    <name>melonPaw Core</name>
     <description>Agent runtime integration, middleware, config, prompt building</description>
 
     <dependencies>

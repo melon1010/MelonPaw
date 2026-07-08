@@ -795,7 +795,7 @@ public class McpClientManager {
             request("initialize", Map.of(
                     "protocolVersion", "2024-11-05",
                     "capabilities", Map.of(),
-                    "clientInfo", Map.of("name", "qwenpaw-java", "version", "1.0.0")
+                    "clientInfo", Map.of("name", "melonpaw-java", "version", "1.0.0")
             ));
             notify("notifications/initialized", Map.of());
         }
@@ -965,7 +965,7 @@ public class McpClientManager {
             request("initialize", Map.of(
                     "protocolVersion", "2024-11-05",
                     "capabilities", Map.of(),
-                    "clientInfo", Map.of("name", "qwenpaw-java", "version", "1.0.0")
+                    "clientInfo", Map.of("name", "melonpaw-java", "version", "1.0.0")
             ));
             notify("notifications/initialized", Map.of());
         }

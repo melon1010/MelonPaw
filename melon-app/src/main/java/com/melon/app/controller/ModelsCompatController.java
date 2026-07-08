@@ -20,7 +20,7 @@ import java.util.*;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * QwenPaw console-compatible model endpoints.
+ * melonPaw console-compatible model endpoints.
  */
 @RestController
 @RequestMapping("/api/models")

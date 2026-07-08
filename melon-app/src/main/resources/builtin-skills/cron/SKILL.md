@@ -1,6 +1,6 @@
 ---
 name: cron
-description: 仅在需要未来定时执行或周期执行任务时使用。Java 版通过 create_cron_job 工具创建任务，前端/API 管理当前 workspace 的 jobs.json；不要使用 qwenpaw cron CLI。
+description: 仅在需要未来定时执行或周期执行任务时使用。Java 版通过 create_cron_job 工具创建任务，前端/API 管理当前 workspace 的 jobs.json；不要使用 melonpaw cron CLI。
 metadata:
   builtin_skill_version: "2.0-java"
   qwenpaw:
@@ -9,7 +9,7 @@ metadata:
 
 # 定时任务管理
 
-本 skill 适用于 Java QwenPaw 后端。定时任务属于当前 agent workspace，落盘到:
+本 skill 适用于 Java melonPaw 后端。定时任务属于当前 agent workspace，落盘到:
 
 ```text
 <workspace>/jobs.json
@@ -62,7 +62,7 @@ create_cron_job
 
 ## 管理任务
 
-不要调用 `qwenpaw cron` 命令。Java 项目不依赖 Python CLI。
+不要调用 `melonpaw cron` 命令。Java 项目不依赖 Python CLI。
 
 管理入口:
 - 前端定时任务页面
@@ -111,7 +111,7 @@ create_cron_job
 
 ## 行为要求
 
-- 不要使用 `qwenpaw cron ...`。
+- 不要使用 `melonpaw cron ...`。
 - 不要直接编辑 `jobs.json`，除非工具/API 不可用且用户明确要求。
 - 创建任务后，告诉用户任务名、cron 表达式和当前 workspace。
 - 如果只是立即执行一次，直接执行，不创建定时任务。

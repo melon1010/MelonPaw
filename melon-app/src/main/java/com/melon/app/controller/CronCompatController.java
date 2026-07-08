@@ -20,7 +20,7 @@ import static com.melon.core.util.ValueUtils.booleanValue;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * QwenPaw frontend-compatible cron API aliases.
+ * melonPaw frontend-compatible cron API aliases.
  */
 @RestController
 @RequestMapping("/api/cron")

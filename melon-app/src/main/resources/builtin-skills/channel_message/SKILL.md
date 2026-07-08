@@ -1,6 +1,6 @@
 ---
 name: channel_message
-description: 当需要主动向用户、会话或频道单向发送消息时，使用本 skill。通常仅在用户明确要求向某个 channel / 会话发送消息，或需要主动通知时使用。先用 qwenpaw chats list 查询 session，再用 qwenpaw channels send 推送消息。
+description: 当需要主动向用户、会话或频道单向发送消息时，使用本 skill。通常仅在用户明确要求向某个 channel / 会话发送消息，或需要主动通知时使用。先用 melonpaw chats list 查询 session，再用 melonpaw channels send 推送消息。
 metadata:
   builtin_skill_version: "1.3"
   qwenpaw:
@@ -22,7 +22,7 @@ metadata:
 - 用户明确要求"处理完后通知我"
 
 ### 不应使用
-- 如果只是当前会话中的正常回复，**不要使用 `qwenpaw channels send`**
+- 如果只是当前会话中的正常回复，**不要使用 `melonpaw channels send`**
 - 需要和用户进行双向对话并立即等待回复
 - 还不知道目标 session 是哪个
 - 想当然猜测 `target-user` 或 `target-session`
@@ -42,19 +42,19 @@ metadata:
 ### 1) 先查询可用 sessions
 
 ```bash
-qwenpaw chats list --agent-id <your_agent> --channel <channel>
+melonpaw chats list --agent-id <your_agent> --channel <channel>
 ```
 
 也可以按用户筛选：
 
 ```bash
-qwenpaw chats list --agent-id <your_agent> --user-id <user_id>
+melonpaw chats list --agent-id <your_agent> --user-id <user_id>
 ```
 
 ### 2) 发送消息
 
 ```bash
-qwenpaw channels send \
+melonpaw channels send \
   --agent-id <your_agent> \
   --channel <channel> \
   --target-user <user_id> \
@@ -68,10 +68,10 @@ qwenpaw channels send \
 
 ```
 1. 判断：是否为用户明确要求发送，或是否需要主动通知
-2. qwenpaw chats list 查询目标 session
+2. melonpaw chats list 查询目标 session
 3. 从结果中获取 user_id 和 session_id
 4. 若有多个 session，优先选最近活跃的
-5. qwenpaw channels send 发送消息
+5. melonpaw channels send 发送消息
 6. 结束（无回复）
 ```
 
@@ -81,7 +81,7 @@ qwenpaw channels send \
 
 ### 必填参数
 
-`qwenpaw channels send` 必须同时提供：
+`melonpaw channels send` 必须同时提供：
 - `--agent-id`
 - `--channel`
 - `--target-user`
@@ -93,7 +93,7 @@ qwenpaw channels send \
 发送前先执行：
 
 ```bash
-qwenpaw chats list --agent-id <your_agent> --channel <channel>
+melonpaw chats list --agent-id <your_agent> --channel <channel>
 ```
 
 从结果中获取：
@@ -104,7 +104,7 @@ qwenpaw chats list --agent-id <your_agent> --channel <channel>
 
 ### 单向推送
 
-`qwenpaw channels send` 只负责发送，不等待回复。
+`melonpaw channels send` 只负责发送，不等待回复。
 
 ---
 
@@ -113,9 +113,9 @@ qwenpaw chats list --agent-id <your_agent> --channel <channel>
 ### 用户明确要求发往某个 channel
 
 ```bash
-qwenpaw chats list --agent-id notify_bot --channel feishu
+melonpaw chats list --agent-id notify_bot --channel feishu
 
-qwenpaw channels send \
+melonpaw channels send \
   --agent-id notify_bot \
   --channel feishu \
   --target-user manager_id \
@@ -126,9 +126,9 @@ qwenpaw channels send \
 ### 任务完成通知
 
 ```bash
-qwenpaw chats list --agent-id task_bot --channel console
+melonpaw chats list --agent-id task_bot --channel console
 
-qwenpaw channels send \
+melonpaw channels send \
   --agent-id task_bot \
   --channel console \
   --target-user alice \
@@ -139,9 +139,9 @@ qwenpaw channels send \
 ### 异步结果回推
 
 ```bash
-qwenpaw chats list --agent-id analyst_bot --user-id alice
+melonpaw chats list --agent-id analyst_bot --user-id alice
 
-qwenpaw channels send \
+melonpaw channels send \
   --agent-id analyst_bot \
   --channel console \
   --target-user alice \
@@ -155,14 +155,14 @@ qwenpaw channels send \
 
 ### 错误 1：把正常回复当成 channel send
 
-如果你正在当前会话里直接回复用户，不要使用 `qwenpaw channels send`。
+如果你正在当前会话里直接回复用户，不要使用 `melonpaw channels send`。
 
 ### 错误 2：没查 session 就直接发
 
 不要猜 `target-user` 或 `target-session`，先执行：
 
 ```bash
-qwenpaw chats list --agent-id <your_agent> --channel <channel>
+melonpaw chats list --agent-id <your_agent> --channel <channel>
 ```
 
 ### 错误 3：缺少必填参数
@@ -184,37 +184,37 @@ qwenpaw chats list --agent-id <your_agent> --channel <channel>
 ### 查看所有会话
 
 ```bash
-qwenpaw chats list --agent-id <your_agent>
+melonpaw chats list --agent-id <your_agent>
 ```
 
 ### 查看某个用户的会话
 
 ```bash
-qwenpaw chats list --agent-id <your_agent> --user-id <user_id>
+melonpaw chats list --agent-id <your_agent> --user-id <user_id>
 ```
 
 ### 查看可用频道
 
 ```bash
-qwenpaw channels list --agent-id <your_agent>
+melonpaw channels list --agent-id <your_agent>
 ```
 
 ---
 
 ## 与 Agent Chat 的区别
 
-- **qwenpaw agents chat**：发给其他 agent，双向，有回复
-- **qwenpaw channels send**：发给用户/会话/频道，单向，无回复
+- **melonpaw agents chat**：发给其他 agent，双向，有回复
+- **melonpaw channels send**：发给用户/会话/频道，单向，无回复
 
 **选择原则**：
-- 要找其他 agent 协作 → `qwenpaw agents chat`
-- 要主动给用户推送消息 → `qwenpaw channels send`
+- 要找其他 agent 协作 → `melonpaw agents chat`
+- 要主动给用户推送消息 → `melonpaw channels send`
 
 ---
 
 ## 完整参数说明
 
-### qwenpaw chats list
+### melonpaw chats list
 
 **必填参数**：
 - `--agent-id`：Agent ID
@@ -224,13 +224,13 @@ qwenpaw channels list --agent-id <your_agent>
 - `--user-id`：按用户筛选
 - `--base-url`：覆盖API地址
 
-### qwenpaw channels send
+### melonpaw channels send
 
 **必填参数**（5个）：
 - `--agent-id`：发送方agent ID
 - `--channel`：目标频道（console/dingtalk/feishu/discord/imessage/qq/...）
-- `--target-user`：目标用户ID（从 `qwenpaw chats list` 获取）
-- `--target-session`：目标会话ID（从 `qwenpaw chats list` 获取）
+- `--target-user`：目标用户ID（从 `melonpaw chats list` 获取）
+- `--target-session`：目标会话ID（从 `melonpaw chats list` 获取）
 - `--text`：消息内容
 
 **可选参数**：
@@ -243,8 +243,8 @@ qwenpaw channels list --agent-id <your_agent>
 随时使用 `-h` 查看详细帮助：
 
 ```bash
-qwenpaw channels -h
-qwenpaw channels send -h
-qwenpaw chats -h
-qwenpaw chats list -h
+melonpaw channels -h
+melonpaw channels send -h
+melonpaw chats -h
+melonpaw chats list -h
 ```

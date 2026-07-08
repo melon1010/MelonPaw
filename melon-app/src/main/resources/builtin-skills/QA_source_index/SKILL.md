@@ -1,6 +1,6 @@
 ---
 name: QA_source_index
-description: "将用户问题中的主题、关键词映射到 QwenPaw 官方文档路径与常见源码入口，减少盲目搜索。适用于内置 QA Agent 在回答安装、配置、技能、MCP、多智能体、记忆、CLI 等问题时快速选定要读的文件。"
+description: "将用户问题中的主题、关键词映射到 melonPaw 官方文档路径与常见源码入口，减少盲目搜索。适用于内置 QA Agent 在回答安装、配置、技能、MCP、多智能体、记忆、CLI 等问题时快速选定要读的文件。"
 metadata:
   builtin_skill_version: "1.3"
   qwenpaw:
@@ -15,34 +15,34 @@ metadata:
 ## 使用步骤
 
 1. 从用户问题中提取主题（对照下表左列或同类词）。
-2. 解析 **`$QWENPAW_ROOT`**：以 `which qwenpaw` 得到可执行路径，若为 `…/.qwenpaw/bin/qwenpaw` 则源码根为其上三级目录（与 **guidance** skill 一致）；否则结合用户给出的安装路径判断。
-3. 先解析 **`$DOCS_DIR`**（兼容多种安装方式）：执行 `python3 -c "from qwenpaw.constant import DOCS_DIR; print(DOCS_DIR or '')" 2>/dev/null`。若返回有效路径则直接使用；否则 fallback 到 `$QWENPAW_ROOT/website/public/docs/`。
+2. 解析 **`$MELONPAW_ROOT`**：以 `which melonpaw` 得到可执行路径，若为 `…/.melonpaw/bin/melonpaw` 则源码根为其上三级目录（与 **guidance** skill 一致）；否则结合用户给出的安装路径判断。
+3. 先解析 **`$DOCS_DIR`**（兼容多种安装方式）：执行 `python3 -c "from melonpaw.constant import DOCS_DIR; print(DOCS_DIR or '')" 2>/dev/null`。若返回有效路径则直接使用；否则 fallback 到 `$MELONPAW_ROOT/website/public/docs/`。
 4. **先读文档** `$DOCS_DIR/<专题>.<语言>.md`（语言取与用户一致：`zh` / `en`），仍不足再读表中 **源码入口**。
 
 ## 主题 / 关键词 → 优先文档与源码
 
-| 主题或关键词（示例） | 优先文档（`$DOCS_DIR/`） | 常见源码入口（相对 `$QWENPAW_ROOT`） |
+| 主题或关键词（示例） | 优先文档（`$DOCS_DIR/`） | 常见源码入口（相对 `$MELONPAW_ROOT`） |
 |---------------------|-----------------------------------|-----------------------------------|
-| 安装、依赖、首次使用 | `quickstart`、`intro` | `src/qwenpaw/cli/`、`pyproject.toml` |
-| 配置、config.json、环境变量 | `config` | `src/qwenpaw/config/config.py`、`src/qwenpaw/constant.py` |
-| 技能、SKILL、skill_pool、内置技能 | `skills` | `src/qwenpaw/agents/skill_system/`、`src/qwenpaw/agents/skills/` |
-| MCP、插件 | `mcp` | `src/qwenpaw/app/routers/`（按需 grep `mcp`） |
-| 多智能体、工作区、agent、内置 QA | `multi-agent` | `src/qwenpaw/app/routers/agents.py`、`src/qwenpaw/app/migration.py`、`src/qwenpaw/constant.py`（`BUILTIN_QA_AGENT_ID` 等） |
-| 记忆、MEMORY、memory_search | `memory` | `src/qwenpaw/agents/memory/memory_manager.py`、`src/qwenpaw/agents/tools/memory_search.py` |
+| 安装、依赖、首次使用 | `quickstart`、`intro` | `src/melonpaw/cli/`、`pyproject.toml` |
+| 配置、config.json、环境变量 | `config` | `src/melonpaw/config/config.py`、`src/melonpaw/constant.py` |
+| 技能、SKILL、skill_pool、内置技能 | `skills` | `src/melonpaw/agents/skill_system/`、`src/melonpaw/agents/skills/` |
+| MCP、插件 | `mcp` | `src/melonpaw/app/routers/`（按需 grep `mcp`） |
+| 多智能体、工作区、agent、内置 QA | `multi-agent` | `src/melonpaw/app/routers/agents.py`、`src/melonpaw/app/migration.py`、`src/melonpaw/constant.py`（`BUILTIN_QA_AGENT_ID` 等） |
+| 记忆、MEMORY、memory_search | `memory` | `src/melonpaw/agents/memory/memory_manager.py`、`src/melonpaw/agents/tools/memory_search.py` |
 | 控制台、前端 | `console` | `console/` |
-| 命令行、子命令、init | `cli` | `src/qwenpaw/cli/`（如 `init_cmd.py`） |
-| 频道、会话 | `channels` | 在 `src/qwenpaw` 下按 `channels` 关键词检索 |
-| 上下文、窗口 | `context` | `config` 文档 + `src/qwenpaw/agents/` 相关逻辑 |
-| 模型、API Key | `models` | `src/qwenpaw/config/config.py` |
-| 心跳、HEARTBEAT | `heartbeat` | 在 `src/qwenpaw` 下检索 `heartbeat` / `HEARTBEAT` |
+| 命令行、子命令、init | `cli` | `src/melonpaw/cli/`（如 `init_cmd.py`） |
+| 频道、会话 | `channels` | 在 `src/melonpaw` 下按 `channels` 关键词检索 |
+| 上下文、窗口 | `context` | `config` 文档 + `src/melonpaw/agents/` 相关逻辑 |
+| 模型、API Key | `models` | `src/melonpaw/config/config.py` |
+| 心跳、HEARTBEAT | `heartbeat` | 在 `src/melonpaw` 下检索 `heartbeat` / `HEARTBEAT` |
 | 桌面客户端 | `desktop` | `desktop/`（若仓库中存在） |
 | 安全 | `security` | 先读 `security.<lang>.md` |
 | 报错、常见问题 | `faq` | 先 `faq.<lang>.md`，再针对性看源码 |
-| 命令与斜杠指令 | `commands` | `src/qwenpaw` 下与 CLI/命令注册相关的模块（按需检索） |
+| 命令与斜杠指令 | `commands` | `src/melonpaw` 下与 CLI/命令注册相关的模块（按需检索） |
 
 ## 约定
 
-- 文档完整路径：`$DOCS_DIR/<专题>.<语言>.md`（无对应语言时用 `.en.md` 兜底）。优先使用 `qwenpaw.constant` 中的 `DOCS_DIR`，失败时 fallback 到 `$QWENPAW_ROOT/website/public/docs/`。
+- 文档完整路径：`$DOCS_DIR/<专题>.<语言>.md`（无对应语言时用 `.en.md` 兜底）。优先使用 `melonpaw.constant` 中的 `DOCS_DIR`，失败时 fallback 到 `$MELONPAW_ROOT/website/public/docs/`。
 - 表中 **源码入口** 为起点；应用 `read_file` 或局部 `grep` 缩小到具体符号，不要一次性通读大目录 listing。
 
 ## 注意

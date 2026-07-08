@@ -41,11 +41,11 @@ public class ChannelRuntimeConfiguration {
     }
 
     @Bean
-    public ChannelManager qwenPawChannelManager(ChannelAdapterRegistry registry,
-                                                ChannelConfigService configService,
-                                                ChannelAccessControlStore accessControlStore,
-                                                ChannelQueueManager queueManager,
-                                                ChannelRuntimeProcessor processor) {
+    public ChannelManager melonPawChannelManager(ChannelAdapterRegistry registry,
+                                                 ChannelConfigService configService,
+                                                 ChannelAccessControlStore accessControlStore,
+                                                 ChannelQueueManager queueManager,
+                                                 ChannelRuntimeProcessor processor) {
         return new ChannelManager(registry, configService, accessControlStore, queueManager, processor::process);
     }
 

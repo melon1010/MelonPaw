@@ -162,7 +162,7 @@ public class DelegateExternalAgentTool extends ToolBase {
             session.request("initialize", Map.of(
                     "protocolVersion", 1,
                     "capabilities", Map.of(),
-                    "clientInfo", Map.of("name", "qwenpaw-java", "version", "1.0.0")
+                    "clientInfo", Map.of("name", "melonpaw-java", "version", "1.0.0")
             ));
             Object created = session.request("new_session", Map.of("cwd", cwd));
             String sessionId = UUID.randomUUID().toString();

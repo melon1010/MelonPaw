@@ -17,7 +17,7 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * QwenPaw frontend-compatible backup API aliases.
+ * melonPaw frontend-compatible backup API aliases.
  */
 @RestController
 @RequestMapping("/api/backups")

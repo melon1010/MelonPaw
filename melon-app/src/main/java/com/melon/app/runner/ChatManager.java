@@ -24,7 +24,7 @@ import java.util.UUID;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * Workspace-scoped chat registry. Matches Python QwenPaw's workspace/chats.json.
+ * Workspace-scoped chat registry. Matches Python melonPaw's workspace/chats.json.
  */
 @Component
 public class ChatManager {

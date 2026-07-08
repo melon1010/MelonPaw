@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * Seeds bundled QwenPaw skills into the shared skill pool.
+ * Seeds bundled melonPaw skills into the shared skill pool.
  */
 @Service
 public class BuiltinSkillInitializer {

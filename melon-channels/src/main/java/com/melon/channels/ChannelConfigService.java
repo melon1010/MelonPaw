@@ -186,7 +186,7 @@ public class ChannelConfigService {
                 config.put("auth_method", "token");
                 config.put("group_allow_from", List.of()); config.put("groups", Map.of()); config.put("encryption", false);
                 config.put("vision_enabled", true); config.put("history_limit", 50); config.put("password", "");
-                config.put("device_name", "qwenpaw-worker"); config.put("sync_timeout_ms", 30000);
+                config.put("device_name", "melonpaw-worker"); config.put("sync_timeout_ms", 30000);
                 config.put("mention_pill_in_body", false); config.put("outbound_structured_mentions", true);
             }
             case "mattermost" -> {
@@ -211,14 +211,14 @@ public class ChannelConfigService {
                 config.put("twilio_account_sid", ""); config.put("twilio_auth_token", ""); config.put("phone_number", "");
                 config.put("phone_number_sid", ""); config.put("tts_provider", "google"); config.put("tts_voice", "en-US-Journey-D");
                 config.put("stt_provider", "deepgram"); config.put("language", "en-US");
-                config.put("welcome_greeting", "Hi! This is QwenPaw. How can I help you?");
+                config.put("welcome_greeting", "Hi! This is melonPaw. How can I help you?");
             }
             case "sip" -> {
                 config.put("sip_mode", "livekit"); config.put("sip_host", "0.0.0.0"); config.put("sip_port", 5061);
                 config.put("sip_username", ""); config.put("sip_password", ""); config.put("sip_server", "");
                 config.put("sip_transport", "UDP"); config.put("rtp_port_low", 10000); config.put("rtp_port_high", 20000);
                 config.put("dashscope_api_key", ""); config.put("tts_provider", "aliyun"); config.put("tts_voice", "");
-                config.put("stt_provider", "aliyun"); config.put("language", "zh-CN"); config.put("welcome_greeting", "你好，我是QwenPaw");
+                config.put("stt_provider", "aliyun"); config.put("language", "zh-CN"); config.put("welcome_greeting", "你好，我是melonPaw");
                 config.put("call_timeout", 120.0); config.put("livekit_url", ""); config.put("livekit_api_key", "");
                 config.put("livekit_api_secret", ""); config.put("livekit_sip_trunk_id", ""); config.put("livekit_room_name", "sip-inbound");
                 config.put("livekit_output_sample_rate", 24000); config.put("max_concurrent_calls", 5);

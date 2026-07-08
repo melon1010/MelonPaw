@@ -35,7 +35,7 @@ public final class MelonAgentFactoryToolkitSelfCheck {
 
     private static void assertPresent(Toolkit toolkit, String name) {
         if (!toolkit.getToolNames().contains(name)) {
-            throw new AssertionError("expected QwenPaw tool name: " + name + ", got " + toolkit.getToolNames());
+            throw new AssertionError("expected melonPaw tool name: " + name + ", got " + toolkit.getToolNames());
         }
     }
 

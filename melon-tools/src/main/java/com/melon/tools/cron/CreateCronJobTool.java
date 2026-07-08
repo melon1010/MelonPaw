@@ -12,7 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Creates a workspace-local QwenPaw cron job.
+ * Creates a workspace-local melonPaw cron job.
  */
 public class CreateCronJobTool extends ToolBase {
 

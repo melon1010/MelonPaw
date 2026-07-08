@@ -3,7 +3,7 @@ package com.melon.app.channel;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
 import com.melon.app.runner.ChatSpec;
-import com.melon.app.runner.QwenPawEnvelopeMapper;
+import com.melon.app.runner.MelonPawEnvelopeMapper;
 import com.melon.channels.ChannelConfigService;
 import com.melon.channels.ChannelInboundMessage;
 import com.melon.channels.ChannelMessageRenderer;
@@ -64,7 +64,7 @@ public class ChannelRuntimeProcessor {
         frontendContext.add(userMessage(inbound.getContent(), inbound.getAttachments()));
         ChatSpec chat = chatManager.getOrCreateForSession(agentId, sessionId, userId, channel, title(text));
         chatManager.setStatus(agentId, chat.getId(), "running");
-        QwenPawEnvelopeMapper envelope = new QwenPawEnvelopeMapper(sessionId);
+        MelonPawEnvelopeMapper envelope = new MelonPawEnvelopeMapper(sessionId);
         Map<String, Object> env = new LinkedHashMap<>();
         env.put("agent_id", agentId);
         env.put("channel", channel);

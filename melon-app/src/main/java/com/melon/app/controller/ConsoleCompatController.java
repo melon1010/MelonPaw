@@ -6,7 +6,7 @@ import com.melon.app.runner.AgentRunner;
 import com.melon.app.runner.ChatManager;
 import com.melon.app.runner.ChatSpec;
 import com.melon.app.runner.CommandDispatcher;
-import com.melon.app.runner.QwenPawEnvelopeMapper;
+import com.melon.app.runner.MelonPawEnvelopeMapper;
 import com.melon.app.service.ApprovalService;
 import com.melon.app.service.InboxStore;
 import com.melon.app.service.SkillService;
@@ -44,7 +44,7 @@ import static com.melon.core.util.ValueUtils.stringValue;
 import java.util.UUID;
 
 /**
- * QwenPaw console-compatible endpoints used by the existing frontend.
+ * melonPaw console-compatible endpoints used by the existing frontend.
  */
 @RestController
 @RequestMapping("/api/console")
@@ -92,7 +92,7 @@ public class ConsoleCompatController {
 
         String commandReply = handleCommand(agentId, text);
         if (commandReply != null) {
-            QwenPawEnvelopeMapper envelope = new QwenPawEnvelopeMapper(sessionId);
+            MelonPawEnvelopeMapper envelope = new MelonPawEnvelopeMapper(sessionId);
             saveCommandShadow(agentId, channel, userId, sessionId, frontendContext, commandReply);
             chatManager.setStatus(agentId, chatId, "idle");
             return Flux.fromIterable(envelope.completeWithText(commandReply))
@@ -117,7 +117,7 @@ public class ConsoleCompatController {
         }
 
         List<Msg> msgs = List.of(new UserMessage(text));
-        QwenPawEnvelopeMapper envelope = new QwenPawEnvelopeMapper(sessionId);
+        MelonPawEnvelopeMapper envelope = new MelonPawEnvelopeMapper(sessionId);
         return agentRunner.stream(agentId, msgs, userId, sessionId, env)
                 .doOnSubscribe(s -> log.info("Console chat started: agent={}, user={}, session={}, chat={}", agentId, userId, sessionId, chatId))
                 .flatMapIterable(envelope::translate)

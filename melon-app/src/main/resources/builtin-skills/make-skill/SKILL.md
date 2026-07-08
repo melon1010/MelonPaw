@@ -10,7 +10,7 @@ metadata:
 
 <!--
   参考 Anthropic 的 `skill-creator` skill（尤其 "creating a skill" 部分），
-  为 QwenPaw 改写。
+  为 melonPaw 改写。
   Credit: https://github.com/anthropics/skills/blob/main/skill-creator/SKILL.md
 -->
 

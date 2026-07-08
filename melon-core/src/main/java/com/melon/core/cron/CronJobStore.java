@@ -10,7 +10,7 @@ import static com.melon.core.util.ValueUtils.booleanValue;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * Workspace-local QwenPaw-compatible jobs.json storage.
+ * Workspace-local melonPaw-compatible jobs.json storage.
  */
 public final class CronJobStore {
 

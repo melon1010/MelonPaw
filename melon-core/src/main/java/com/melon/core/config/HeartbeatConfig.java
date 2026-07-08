@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 
 /**
- * Per-agent heartbeat config used by the QwenPaw console.
+ * Per-agent heartbeat config used by the melonPaw console.
  */
 public class HeartbeatConfig {
 

@@ -92,7 +92,7 @@ public class MelonAgentFactory {
         // 3. 构建记忆配置
         MemoryConfig memoryConfig = buildMemoryConfig(agentConfig);
 
-        // 4. 注册 QwenPaw 命名工具，避免 Harness 默认 execute/grep_files/glob_files 名称进入前端历史。
+        // 4. 注册 melonPaw 命名工具，避免 Harness 默认 execute/grep_files/glob_files 名称进入前端历史。
         Toolkit toolkit = buildToolkit(agentId, agentConfig, workspaceDir);
 
         // 4. 构建 HarnessAgent
@@ -170,7 +170,7 @@ public class MelonAgentFactory {
                 log.warn("Toolkit contributor {} failed for agent {}", contributor.getClass().getName(), agentId, e);
             }
         }
-        log.info("QwenPaw toolkit registered tools: {}", toolkit.getToolNames());
+        log.info("melonPaw toolkit registered tools: {}", toolkit.getToolNames());
         return toolkit;
     }
 
@@ -287,11 +287,11 @@ public class MelonAgentFactory {
                 .mode(strict ? PermissionMode.DEFAULT : PermissionMode.BYPASS);
         if (strict) {
             for (String tool : strictApprovalTools()) {
-                builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "qwenpaw-java"));
+                builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "melonpaw-java"));
             }
         } else {
             builder.addAskRule("execute_shell_command", new PermissionRule("execute_shell_command",
-                    "delete", PermissionBehavior.ASK, "qwenpaw-java"));
+                    "delete", PermissionBehavior.ASK, "melonpaw-java"));
         }
         return builder.build();
     }

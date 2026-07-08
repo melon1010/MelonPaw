@@ -7,7 +7,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * QwenPaw frontend-compatible token usage API aliases.
+ * melonPaw frontend-compatible token usage API aliases.
  */
 @RestController
 @RequestMapping("/api/token-usage")

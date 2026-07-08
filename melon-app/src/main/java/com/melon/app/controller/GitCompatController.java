@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * QwenPaw frontend-compatible git API.
+ * melonPaw frontend-compatible git API.
  */
 @RestController
 @RequestMapping("/api/workspace/git")

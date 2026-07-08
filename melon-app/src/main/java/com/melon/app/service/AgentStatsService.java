@@ -24,7 +24,7 @@ import java.util.Set;
 import static com.melon.core.util.ValueUtils.stringValue;
 
 /**
- * Workspace-backed statistics for the copied QwenPaw Agent Stats page.
+ * Workspace-backed statistics for the copied melonPaw Agent Stats page.
  */
 @Service
 public class AgentStatsService {

@@ -93,7 +93,7 @@ metadata:
 特点：
 
 - 连接成功后，可以继续使用 `open`、`snapshot`、`click`、`type` 等常规操作
-- 这是**附着到外部浏览器**，不是 QwenPaw 自己启动的新进程
+- 这是**附着到外部浏览器**，不是 melonPaw 自己启动的新进程
 - `stop` 时只断开连接，**不会关闭外部浏览器**
 - 当前也受 idle auto-stop 管理，但 external CDP 的 auto-stop 语义是“自动断开，不关闭外部浏览器”
 
@@ -149,7 +149,7 @@ metadata:
 
 CDP 相关 stop 需要区分两类：
 
-### 1. QwenPaw 自己启动的 managed CDP
+### 1. melonPaw 自己启动的 managed CDP
 
 例如：
 
@@ -163,7 +163,7 @@ CDP 相关 stop 需要区分两类：
 {"action": "start", "cdp_port": 9222}
 ```
 
-这类浏览器由 QwenPaw 自行启动并持有进程，`stop` 时会：
+这类浏览器由 melonPaw 自行启动并持有进程，`stop` 时会：
 
 - 断开 Playwright / CDP 连接
 - 关闭该浏览器进程
@@ -176,7 +176,7 @@ CDP 相关 stop 需要区分两类：
 {"action": "connect_cdp", "cdp_url": "http://localhost:9222"}
 ```
 
-这类浏览器不是 QwenPaw 启动的，`stop` 时只会：
+这类浏览器不是 melonPaw 启动的，`stop` 时只会：
 
 - 断开连接
 - **不会关闭外部浏览器进程**

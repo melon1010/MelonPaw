@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>melon-app</artifactId>
-    <name>Melon Application</name>
+    <name>melonPaw Application</name>
     <description>Spring Boot HTTP service, CLI, controllers</description>
 
     <dependencies>
