@@ -24,7 +24,7 @@
 ## 🏗️ 项目结构
 
 ```
-melonPaw-java/
+MelonPaw/
 ├── melon-plugin-api/     # 插件 SPI 接口（MelonPlugin, PluginContext, PluginTool）
 ├── melon-core/           # 核心：Agent 运行时、中间件、配置、Provider、计划、安全
 │   ├── agent/            #   Agent 模板、多 Agent 管理、工作区、消息处理工具
@@ -81,8 +81,8 @@ melon-plugin-api  ←──  melon-core  ←──  melon-tools
 ### 1. 克隆并构建
 
 ```bash
-git clone https://github.com/melon1010/melonPaw-java.git
-cd melonPaw-java
+git clone <your-repository-url>
+cd MelonPaw
 mvn clean install -DskipTests
 ```
 
@@ -289,5 +289,4 @@ public class MyPlugin implements MelonPlugin {
 
 ## 📌 相关
 
-- 代码质量分析报告见 [CODE_ANALYSIS.md](doc/CODE_ANALYSIS.md)
 - 前端控制台说明见 [console/REMADE.md](./console/REMADE.md)
