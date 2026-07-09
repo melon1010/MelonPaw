@@ -155,12 +155,19 @@ public final class ChatManagerSelfCheck {
                 {"type":"message","id":"u-log","timestamp":1.0,"role":"USER","content":"original question"}
                 {"type":"message","id":"a-log","timestamp":2.0,"role":"ASSISTANT","content":"I will read.\\n[tool_call: read_file({\\"file_path\\":\\"AGENTS.md\\"})]","toolCallId":"call-read"}
                 {"type":"message","id":"t-log","timestamp":3.0,"role":"TOOL","content":"[tool_result: read_file] ok","toolCallId":"call-read"}
+                {"type":"message","id":"a-agent-log","timestamp":4.0,"role":"ASSISTANT","content":"[tool_call: agent_spawn({\\"agent_id\\":\\"general-purpose\\",\\"task\\":\\"inspect code\\",\\"timeout_seconds\\":0})]","toolCallId":"call-agent"}
                 """);
         manager.saveSessionShadowFromStateStore("default", "console", "u1", "s6", List.of());
         Map<String, Object> repaired = JsonUtils.loadAsMap(home.resolve("workspaces/default/sessions/console/u1_s6.json"));
         String repairedText = repaired.toString();
         if (!repairedText.contains("original question") || repairedText.contains("bad summary") || repairedText.contains("<summary>hidden</summary>")) {
             throw new AssertionError("compacted state should be repaired from jsonl before saving: " + repaired);
+        }
+        if (repairedText.contains("agent_spawn")
+                || !repairedText.contains("submit_to_agent")
+                || !repairedText.contains("to_agent")
+                || !repairedText.contains("inspect code")) {
+            throw new AssertionError("repaired jsonl tools should use frontend-compatible names and args: " + repaired);
         }
 
         Path legacyDir = home.resolve("chats");

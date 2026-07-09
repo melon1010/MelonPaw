@@ -292,6 +292,7 @@ public class MelonAgentFactory {
             return PermissionContextState.builder().mode(PermissionMode.BYPASS).build();
         }
         boolean strict = "STRICT".equalsIgnoreCase(level);
+        boolean smart = "SMART".equalsIgnoreCase(level);
         PermissionContextState.Builder builder = PermissionContextState.builder()
                 .mode(strict ? PermissionMode.DEFAULT : PermissionMode.BYPASS);
         if (strict) {
@@ -301,12 +302,52 @@ public class MelonAgentFactory {
         } else {
             builder.addAskRule("execute_shell_command", new PermissionRule("execute_shell_command",
                     "delete", PermissionBehavior.ASK, "melonpaw-java"));
+            builder.addAskRule("execute_shell_command", new PermissionRule("execute_shell_command",
+                    "qwenpaw-dangerous-shell", PermissionBehavior.ASK, "melonpaw-java"));
+            for (String tool : lifecycleApprovalTools()) {
+                builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "melonpaw-java"));
+            }
+            if (smart) {
+                for (String tool : smartApprovalTools()) {
+                    builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "melonpaw-java"));
+                }
+            }
         }
         return builder.build();
     }
 
+    private List<String> lifecycleApprovalTools() {
+        return List.of(
+                "create_cron_job",
+                "delegate_external_agent",
+                "skill_manage",
+                "propose_skill",
+                "task_cancel",
+                "plan_exit"
+        );
+    }
+
+    private List<String> smartApprovalTools() {
+        return List.of(
+                "execute_shell_command",
+                "write_file",
+                "edit_file",
+                "browser_use",
+                "spawn_subagent",
+                "submit_to_agent",
+                "chat_with_agent",
+                "agent_spawn",
+                "agent_send"
+        );
+    }
+
     private List<String> strictApprovalTools() {
-        return List.of("execute_shell_command", "write_file", "edit_file", "read_file", "grep_search", "glob_search");
+        java.util.LinkedHashSet<String> tools = new java.util.LinkedHashSet<>();
+        tools.addAll(List.of("execute_shell_command", "write_file", "edit_file", "read_file", "grep_search", "glob_search"));
+        tools.addAll(lifecycleApprovalTools());
+        tools.addAll(smartApprovalTools());
+        tools.addAll(List.of("materialize_skill", "check_agent_task", "task_output", "task_list", "memory_search", "memory_get", "session_search"));
+        return List.copyOf(tools);
     }
 
     /**

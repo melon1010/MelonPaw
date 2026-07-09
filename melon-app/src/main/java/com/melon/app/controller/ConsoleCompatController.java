@@ -16,6 +16,7 @@ import com.melon.core.agent.MultiAgentManager;
 import com.melon.core.util.SafePathUtil;
 import com.melon.tools.agent.AgentChatBridge;
 import com.melon.tools.agent.SubmitToAgentTool;
+import com.melon.tools.shell.ExecuteShellCommandTool;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
@@ -186,6 +187,7 @@ public class ConsoleCompatController {
 
         boolean approvalCancelled = approvalService.cancelPendingApproval(sessionId);
         boolean planCancelled = approvalService.cancelPendingPlan(sessionId);
+        int shellCancelled = ExecuteShellCommandTool.cancelSession(sessionId);
         if (!chatId.isBlank()) {
             chatManager.setStatus(effectiveAgentId, chatId, "idle");
         }
@@ -194,6 +196,7 @@ public class ConsoleCompatController {
                 "interrupted", interrupted,
                 "approval_cancelled", approvalCancelled,
                 "plan_cancelled", planCancelled,
+                "shell_cancelled", shellCancelled,
                 "chat_id", chatId,
                 "agent_id", effectiveAgentId,
                 "session_id", sessionId,

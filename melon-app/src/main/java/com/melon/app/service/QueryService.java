@@ -1,7 +1,7 @@
 package com.melon.app.service;
 
 import com.melon.app.runner.AgentRunner;
-import com.melon.app.runner.SseEventMapper;
+import com.melon.app.runner.MelonPawEnvelopeMapper;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
@@ -24,11 +24,9 @@ public class QueryService {
     private static final Logger log = LoggerFactory.getLogger(QueryService.class);
 
     private final AgentRunner agentRunner;
-    private final SseEventMapper sseEventMapper;
 
-    public QueryService(AgentRunner agentRunner, SseEventMapper sseEventMapper) {
+    public QueryService(AgentRunner agentRunner) {
         this.agentRunner = agentRunner;
-        this.sseEventMapper = sseEventMapper;
     }
 
     /**
@@ -59,14 +57,14 @@ public class QueryService {
     public Flux<ServerSentEvent<String>> streamQuery(String agentId, String message, String sessionId, String userId) {
         log.info("Stream query to agent {}: {} (session={}, user={})", agentId, message, sessionId, userId);
 
+        MelonPawEnvelopeMapper envelope = new MelonPawEnvelopeMapper(sessionId);
         return agentRunner.stream(agentId, List.of(new UserMessage(message)), userId, sessionId, Map.of())
-            .map(sseEventMapper::map)
+            .flatMapIterable(envelope::translate)
+            .concatWith(Flux.defer(() -> Flux.fromIterable(envelope.finish())))
+            .startWith(envelope.start())
             .onErrorResume(e -> {
                 log.error("Stream query failed", e);
-                return Flux.just(ServerSentEvent.<String>builder()
-                    .event("error")
-                    .data("Error: " + e.getMessage())
-                    .build());
+                return Flux.fromIterable(envelope.error(e));
             });
     }
 }

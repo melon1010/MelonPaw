@@ -14,9 +14,10 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Plan 门控中间件. 对应 Python _acting 中的 Plan 门控逻辑.
- * Plan 等待确认时阻止非 plan 管理工具执行.
+ * Deprecated legacy Plan gate for the old Python-style plan tools.
+ * Current Java runtime uses AgentScope Harness plan_enter/plan_write/plan_exit.
  */
+@Deprecated(forRemoval = false)
 public class PlanGateMiddleware implements MiddlewareBase {
 
     private static final Logger log = LoggerFactory.getLogger(PlanGateMiddleware.class);

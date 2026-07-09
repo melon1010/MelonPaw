@@ -371,7 +371,7 @@ public class ConfigManager {
                 "skill_manage", "propose_skill", "load_skill_through_path",
                 "reset_equipped_tools",
                 "plan_enter", "plan_write", "plan_exit",
-                "task", "task_output")) {
+                "task", "task_output", "task_list", "task_cancel")) {
             BuiltinToolConfig tool = current.get(legacy);
             if (tool != null) {
                 tool.setEnabled(false);

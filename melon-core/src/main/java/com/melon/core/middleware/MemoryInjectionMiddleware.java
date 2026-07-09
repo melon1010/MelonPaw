@@ -22,9 +22,10 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * 记忆被动注入中间件. 对应 Python LightContextManager.pre_reply.
- * 在 agent 回复前调用 memory_search, 将结果作为伪造 tool_use+tool_result 注入.
+ * Deprecated stub for the old Python-style passive memory injection.
+ * Current Java runtime uses AgentScope Harness memory_search/memory_get/session_search tools.
  */
+@Deprecated(forRemoval = false)
 public class MemoryInjectionMiddleware implements MiddlewareBase {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryInjectionMiddleware.class);

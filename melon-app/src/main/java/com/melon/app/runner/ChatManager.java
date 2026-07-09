@@ -444,8 +444,8 @@ public class ChatManager {
         Map<String, Object> block = new LinkedHashMap<>();
         block.put("type", "tool_call");
         block.put("id", valueOrDefault(fallbackCallId, UUID.randomUUID().toString().replace("-", "")));
-        block.put("name", name);
-        block.put("input", args);
+        block.put("name", FrontendToolCompat.displayToolName(name));
+        block.put("input", FrontendToolCompat.argumentsJson(name, args));
         block.put("state", "finished");
         return block;
     }
@@ -458,7 +458,7 @@ public class ChatManager {
         Map<String, Object> block = new LinkedHashMap<>();
         block.put("type", "tool_result");
         block.put("id", valueOrDefault(fallbackCallId, UUID.randomUUID().toString().replace("-", "")));
-        block.put("name", name);
+        block.put("name", FrontendToolCompat.displayToolName(name));
         block.put("output", List.of(Map.of("type", "text", "text", output)));
         block.put("state", "success");
         return block;
