@@ -11,6 +11,7 @@ import io.agentscope.core.permission.PermissionRule;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig;
 import io.agentscope.harness.agent.memory.MemoryConfig;
 import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.tool.SkillManageConfig;
@@ -18,6 +19,8 @@ import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.JsonFileAgentStateStore;
 import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ContextCompactConfig;
+import com.melon.core.config.LightContextConfig;
+import com.melon.core.config.ToolResultPruningConfig;
 import com.melon.core.middleware.*;
 import com.melon.core.provider.ProviderManager;
 import org.slf4j.Logger;
@@ -27,8 +30,10 @@ import java.lang.reflect.Constructor;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * HarnessAgent 构建工厂. 对应 Python react_agent.py 的 MelonAgent.__init__ + _create_toolkit + _build_sys_prompt + _register_hooks.
@@ -88,6 +93,7 @@ public class MelonAgentFactory {
 
         // 2. 构建压缩配置
         CompactionConfig compaction = buildCompactionConfig(agentConfig.getContextCompact());
+        ToolResultEvictionConfig toolResultEviction = buildToolResultEvictionConfig(agentConfig);
 
         // 3. 构建记忆配置
         MemoryConfig memoryConfig = buildMemoryConfig(agentConfig);
@@ -108,6 +114,7 @@ public class MelonAgentFactory {
                         .executeTimeoutSeconds(shellTimeoutSeconds(agentConfig)))
                 .middlewares(middlewares)
                 .compaction(compaction)
+                .toolResultEviction(toolResultEviction)
                 .memory(memoryConfig)
                 .stateStore(stateStore)
                 .maxIters(agentConfig.getRunning().getMaxIters())
@@ -163,6 +170,7 @@ public class MelonAgentFactory {
         registerIfEnabled(toolkit, config, "check_agent_task", "com.melon.tools.agent.CheckAgentTaskTool");
         registerIfEnabled(toolkit, config, "spawn_subagent", "com.melon.tools.agent.SpawnSubagentTool");
         registerIfEnabled(toolkit, config, "delegate_external_agent", "com.melon.tools.agent.DelegateExternalAgentTool", workspaceDir);
+        registerIfEnabled(toolkit, config, "materialize_skill", "com.melon.tools.skill.MaterializeSkillTool", workspaceDir);
         for (ToolkitContributor contributor : toolkitContributors) {
             try {
                 contributor.contribute(agentId, config, workspaceDir, toolkit);
@@ -251,7 +259,8 @@ public class MelonAgentFactory {
             }
         }));
 
-        // Java 侧尚无真实 ReMeLight/ADBPG search backend，不注入假 memory_search 能力。
+        // HarnessAgent 会注册官方 file-backed memory_search/memory_get/session_search 工具。
+        // Java 侧尚未接入 Python 的 ReMeLight/ADBPG 语义记忆后端，所以这里不再注入自定义假 memory_search。
 
         return list;
     }
@@ -329,6 +338,39 @@ public class MelonAgentFactory {
                 .build());
 
         return builder.build();
+    }
+
+    /**
+     * 构建单条工具结果驱逐配置. 对应 AgentScope 2.0 官方 ToolResultEvictionMiddleware.
+     */
+    private ToolResultEvictionConfig buildToolResultEvictionConfig(AgentConfig config) {
+        ToolResultEvictionConfig.Builder builder = ToolResultEvictionConfig.builder();
+
+        LightContextConfig light = config.getLightContextConfig();
+        ToolResultPruningConfig pruning = light != null ? light.getToolResultPruningConfig() : null;
+        if (pruning != null && pruning.isEnabled()) {
+            int maxChars = firstPositive(pruning.getPruningOldMsgMaxBytes(), pruning.getPruningRecentMsgMaxBytes());
+            if (maxChars > 0) {
+                builder.maxResultChars(maxChars);
+                builder.previewChars(Math.min(ToolResultEvictionConfig.DEFAULT_PREVIEW_CHARS,
+                        Math.max(500, maxChars / 10)));
+            }
+        }
+
+        Set<String> excluded = new LinkedHashSet<>(ToolResultEvictionConfig.DEFAULT_EXCLUDED_TOOLS);
+        excluded.add("grep_search");
+        excluded.add("glob_search");
+        if (pruning != null && pruning.getExemptToolNames() != null) {
+            excluded.addAll(pruning.getExemptToolNames());
+        }
+        builder.excludedToolNames(excluded);
+        return builder.build();
+    }
+
+    private int firstPositive(int first, int second) {
+        if (first > 0) return first;
+        if (second > 0) return second;
+        return 0;
     }
 
     /**

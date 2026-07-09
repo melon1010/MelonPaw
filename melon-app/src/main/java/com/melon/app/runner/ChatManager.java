@@ -2,6 +2,7 @@ package com.melon.app.runner;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.melon.app.service.HistoryStore;
+import com.melon.core.config.AgentConfig;
 import com.melon.core.config.ConfigManager;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
@@ -31,7 +32,7 @@ public class ChatManager {
 
     private static final Logger log = LoggerFactory.getLogger(ChatManager.class);
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
-    private static final int LARGE_TOOL_OUTPUT_CHARS = 12000;
+    private static final int DEFAULT_TOOL_OUTPUT_TOKEN_CAP = 3000;
     private static final String COMPACTION_SUMMARY_PREFIX =
             "You are in the middle of a conversation that has been summarized.";
 
@@ -129,9 +130,9 @@ public class ChatManager {
         Map<String, Object> agent = new LinkedHashMap<>();
         agent.put("state", normalizedState);
         if (historyStore != null) {
-            historyStore.appendSession(agentId, sessionId, normalizedState);
+            historyStore.appendSessionAsync(agentId, sessionId, normalizedState);
         }
-        agent.put("scroll", scrollIndex(agentId, sessionId, normalizedState));
+        agent.put("scroll", stateScrollIndex(agentId, sessionId, normalizedState));
         JsonUtils.save(sessionFile(agentId, channel, userId, sessionId), Map.of("agent", agent));
     }
 
@@ -472,11 +473,7 @@ public class ChatManager {
                 .noneMatch(existing -> id.equals(stringValue(existing.get("id"))));
     }
 
-    private Map<String, Object> scrollIndex(String agentId, String sessionId, Map<String, Object> state) {
-        if (historyStore != null) {
-            Map<String, Object> stored = historyStore.scrollIndex(agentId, sessionId);
-            if (!stored.isEmpty()) return stored;
-        }
+    private Map<String, Object> stateScrollIndex(String agentId, String sessionId, Map<String, Object> state) {
         List<String> persistedIds = new ArrayList<>();
         List<String> persistedTcids = new ArrayList<>();
         Map<String, Object> seqById = new LinkedHashMap<>();
@@ -609,7 +606,7 @@ public class ChatManager {
     private void maybeSpillLargeToolOutput(String agentId, Map<String, Object> block) {
         Object output = block.get("output");
         String text = output instanceof String s ? s : JsonUtils.toJson(output);
-        if (text == null || text.length() <= LARGE_TOOL_OUTPUT_CHARS) return;
+        if (text == null || text.length() <= largeToolOutputChars(agentId)) return;
         try {
             Path dir = configManager.resolveWorkspaceDir(normalizeAgentId(agentId)).resolve("tool_results");
             Files.createDirectories(dir);
@@ -624,6 +621,19 @@ public class ChatManager {
         } catch (Exception e) {
             log.warn("Failed to spill large tool output for agent={}", agentId, e);
         }
+    }
+
+    private int largeToolOutputChars(String agentId) {
+        AgentConfig agent = configManager.getConfig().getAgent(normalizeAgentId(agentId));
+        if (agent == null || agent.getLightContextConfig() == null
+                || agent.getLightContextConfig().getScrollConfig() == null) {
+            return DEFAULT_TOOL_OUTPUT_TOKEN_CAP * 4;
+        }
+        int cap = agent.getLightContextConfig().getScrollConfig().getToolOutputTokenCap();
+        double divisor = agent.getLightContextConfig().getTokenCountEstimateDivisor();
+        if (cap <= 0) cap = DEFAULT_TOOL_OUTPUT_TOKEN_CAP;
+        if (divisor <= 0) divisor = 4.0;
+        return Math.max(1, (int) Math.ceil(cap * divisor));
     }
 
     private int blockCount(Object content) {

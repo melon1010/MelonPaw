@@ -31,6 +31,9 @@ public final class HistoryStoreSelfCheck {
         ));
         chatManager.saveSessionShadow("default", "console", "u1", "s1", state);
         chatManager.saveSessionShadow("default", "console", "u1", "s1", state);
+        if (!historyStore.awaitIdle(5000)) {
+            throw new AssertionError("history async writer did not become idle");
+        }
 
         if (!Files.isRegularFile(home.resolve("workspaces/default/history.db"))) {
             throw new AssertionError("history.db was not created");
@@ -58,6 +61,42 @@ public final class HistoryStoreSelfCheck {
         }
         if (historyStore.purge("default", Instant.now().plusSeconds(60).toString()) != 3) {
             throw new AssertionError("history purge failed");
+        }
+        if (!historyStore.search("default", "hello", 10).isEmpty()) {
+            throw new AssertionError("history FTS should not return purged rows");
+        }
+
+        Path sessionDir = home.resolve("workspaces/default/sessions/console");
+        Files.createDirectories(sessionDir);
+        Files.writeString(sessionDir.resolve("u1_synced.json"), """
+                {"agent":{"state":{"context":[
+                  {"id":"sync-u","role":"user","content":[{"type":"text","text":"synced question"}]},
+                  {"id":"sync-a","role":"assistant","content":[{"type":"text","text":"synced answer"}]}
+                ]}}}
+                """);
+        int syncedRows = historyStore.syncWorkspaceSessions("default");
+        if (syncedRows < 2 || historyStore.count("default", "synced") != 2) {
+            throw new AssertionError("session sync should import target session rows: synced=" + syncedRows);
+        }
+        if (historyStore.syncWorkspaceSessions("default") != 0) {
+            throw new AssertionError("session sync should be idempotent");
+        }
+        if (historyStore.search("default", "synced", 10).isEmpty()) {
+            throw new AssertionError("synced session should be searchable");
+        }
+        historyStore.appendSessionAsync("default", "async-session", Map.of("context", List.of(
+                Map.of("id", "async-u", "role", "user", "content", List.of(Map.of("type", "text", "text", "async write")))
+        )));
+        if (!historyStore.awaitIdle(5000) || historyStore.count("default", "async-session") != 1) {
+            throw new AssertionError("async history write did not complete");
+        }
+
+        Path db = home.resolve("workspaces/default/history.db");
+        Files.writeString(db, "not a sqlite db");
+        historyStore.count("default", "after-corrupt");
+        if (Files.list(home.resolve("workspaces/default"))
+                .noneMatch(path -> path.getFileName().toString().startsWith("history.db.corrupt-"))) {
+            throw new AssertionError("corrupt history.db should be quarantined");
         }
     }
 }

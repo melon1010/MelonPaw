@@ -1,8 +1,11 @@
 package com.melon.app.cli;
 
+import com.melon.app.cli.context.CliOptionResolver;
+import com.melon.app.cli.context.CliOptions;
 import com.melon.core.util.PlatformUtil;
 import picocli.CommandLine.Command;
-import picocli.CommandLine.Option;
+import picocli.CommandLine.Model.CommandSpec;
+import picocli.CommandLine.Spec;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -15,14 +18,15 @@ import java.util.concurrent.Callable;
  * CLI command to run a health check.
  * Checks Java version, OS, disk space, config file existence, and port availability.
  */
-@Command(name = "doctor", description = "Health check", mixinStandardHelpOptions = true)
+@Command(name = "doctor", description = "Health check", mixinStandardHelpOptions = true, subcommands = DoctorCommand.Fix.class)
 public class DoctorCommand implements Callable<Integer> {
 
-    @Option(names = "--port", defaultValue = "8088", description = "Port to check")
-    int port;
+    @Spec
+    CommandSpec commandSpec;
 
     @Override
     public Integer call() {
+        CliOptions options = CliOptionResolver.from(commandSpec);
         System.out.println("Melon Health Check");
         System.out.println("====================");
         System.out.println();
@@ -64,17 +68,18 @@ public class DoctorCommand implements Callable<Integer> {
         }
 
         // 5. Config file
-        Path configPath = Path.of(System.getProperty("user.home"), ".melon", "config.yaml");
+        com.melon.app.cli.paths.CliPathResolver paths = new com.melon.app.cli.paths.CliPathResolver();
+        Path configPath = paths.configPath();
         boolean configExists = Files.exists(configPath);
         System.out.printf("[%s] Config File: %s%n",
                 configExists ? "OK  " : "FAIL", configPath);
         if (!configExists) {
-            System.out.println("       Run 'melon init' to create configuration.");
+            System.out.println("       Run 'melonpaw init' to create configuration.");
             allOk = false;
         }
 
         // 6. Sessions directory
-        Path sessionsDir = Path.of(System.getProperty("user.home"), ".melon", "sessions");
+        Path sessionsDir = paths.resolveUnderHome("sessions");
         boolean sessionsExists = Files.exists(sessionsDir);
         System.out.printf("[%s] Sessions Dir: %s%n",
                 sessionsExists ? "OK  " : "WARN", sessionsDir);
@@ -83,7 +88,7 @@ public class DoctorCommand implements Callable<Integer> {
         }
 
         // 7. Skills directory
-        Path skillsDir = Path.of(System.getProperty("user.home"), ".melon", "skills");
+        Path skillsDir = paths.resolveUnderHome("skills");
         boolean skillsExists = Files.exists(skillsDir);
         System.out.printf("[%s] Skills Dir: %s%n",
                 skillsExists ? "OK  " : "WARN", skillsDir);
@@ -92,6 +97,7 @@ public class DoctorCommand implements Callable<Integer> {
         }
 
         // 8. Port availability
+        int port = options.getPort();
         boolean portAvailable = false;
         try (ServerSocket socket = new ServerSocket(port)) {
             portAvailable = true;
@@ -112,6 +118,30 @@ public class DoctorCommand implements Callable<Integer> {
             System.out.println("Some checks failed. See messages above.");
         }
         return allOk ? 0 : 1;
+    }
+
+
+    @Command(name = "fix", description = "Create missing local CLI directories", mixinStandardHelpOptions = true)
+    static class Fix implements Callable<Integer> {
+        @Override
+        public Integer call() {
+            com.melon.app.cli.paths.CliPathResolver paths = new com.melon.app.cli.paths.CliPathResolver();
+            try {
+                Files.createDirectories(paths.cacheDir());
+                Files.createDirectories(paths.logDir());
+                Files.createDirectories(paths.workspaceDir("default"));
+                Files.createDirectories(paths.resolveUnderHome("sessions"));
+                Files.createDirectories(paths.resolveUnderHome("skills"));
+                if (!Files.exists(paths.configPath())) {
+                    Files.writeString(paths.configPath(), "# MelonPaw CLI config\n");
+                }
+                System.out.println("Fixed local paths under " + paths.homeDir());
+                return 0;
+            } catch (IOException e) {
+                System.err.println("Fix failed: " + e.getMessage());
+                return 1;
+            }
+        }
     }
 
     private String formatBytes(long bytes) {

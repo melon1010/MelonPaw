@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -25,25 +27,37 @@ import java.util.stream.Collectors;
 public class MediaFilterMiddleware implements MiddlewareBase {
 
     private static final Logger log = LoggerFactory.getLogger(MediaFilterMiddleware.class);
-    private volatile boolean rejectsMedia = false;
+    private final Set<String> mediaRejectedSlots = ConcurrentHashMap.newKeySet();
 
     @Override
     public Flux<AgentEvent> onReasoning(
             Agent agent, RuntimeContext ctx, ReasoningInput input,
             Function<ReasoningInput, Flux<AgentEvent>> next) {
 
-        final ReasoningInput effectiveInput = rejectsMedia ? stripMediaBlocks(input) : input;
+        String slotKey = slotKey(agent, ctx);
+        final ReasoningInput effectiveInput = mediaRejectedSlots.contains(slotKey) ? stripMediaBlocks(input) : input;
 
         Flux<AgentEvent> result = next.apply(effectiveInput);
 
         return result.onErrorResume(e -> {
             if (isMediaError(e)) {
-                log.warn("Media error detected, stripping media blocks and retrying");
-                rejectsMedia = true;
+                log.warn("Media error detected for {}, stripping media blocks and retrying", slotKey);
+                mediaRejectedSlots.add(slotKey);
                 return next.apply(stripMediaBlocks(effectiveInput));
             }
             return Flux.error(e);
         });
+    }
+
+    private String slotKey(Agent agent, RuntimeContext ctx) {
+        String agentName = agent != null && agent.getName() != null ? agent.getName() : "agent";
+        String userId = ctx != null && ctx.getUserId() != null && !ctx.getUserId().isBlank()
+                ? ctx.getUserId()
+                : "__anon__";
+        String sessionId = ctx != null && ctx.getSessionId() != null && !ctx.getSessionId().isBlank()
+                ? ctx.getSessionId()
+                : "default";
+        return agentName + "/" + userId + "/" + sessionId;
     }
 
     /**

@@ -369,7 +369,7 @@ public class ConfigManager {
                 "append_file", "memory_search", "memory_get",
                 "session_search", "session_list", "session_history",
                 "skill_manage", "propose_skill", "load_skill_through_path",
-                "materialize_skill", "reset_equipped_tools",
+                "reset_equipped_tools",
                 "plan_enter", "plan_write", "plan_exit",
                 "task", "task_output")) {
             BuiltinToolConfig tool = current.get(legacy);

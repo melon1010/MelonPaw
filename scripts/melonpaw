@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+JAR=${MELONPAW_JAR:-"$SCRIPT_DIR/../melon-app/target/melon-app-1.0.0-SNAPSHOT.jar"}
+if [ ! -f "$JAR" ]; then
+  echo "MelonPaw jar not found: $JAR" >&2
+  echo "Build it first with: mvn -pl melon-app -am package" >&2
+  exit 1
+fi
+exec java -jar "$JAR" "$@"

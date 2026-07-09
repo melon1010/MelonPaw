@@ -15,10 +15,10 @@ public final class MelonAgentFactoryToolkitSelfCheck {
 
     public static void main(String[] args) throws Exception {
         MelonAgentFactory factory = new MelonAgentFactory();
-        Method buildToolkit = MelonAgentFactory.class.getDeclaredMethod("buildToolkit", AgentConfig.class, Path.class);
+        Method buildToolkit = MelonAgentFactory.class.getDeclaredMethod("buildToolkit", String.class, AgentConfig.class, Path.class);
         buildToolkit.setAccessible(true);
 
-        Toolkit toolkit = (Toolkit) buildToolkit.invoke(factory, new AgentConfig(), Files.createTempDirectory("melon-toolkit-check"));
+        Toolkit toolkit = (Toolkit) buildToolkit.invoke(factory, "default", new AgentConfig(), Files.createTempDirectory("melon-toolkit-check"));
 
         assertPresent(toolkit, "execute_shell_command");
         assertPresent(toolkit, "grep_search");
@@ -26,11 +26,11 @@ public final class MelonAgentFactoryToolkitSelfCheck {
         assertPresent(toolkit, "browser_use");
         assertPresent(toolkit, "list_agents");
         assertPresent(toolkit, "spawn_subagent");
+        assertPresent(toolkit, "materialize_skill");
         assertAbsent(toolkit, "execute");
         assertAbsent(toolkit, "grep_files");
         assertAbsent(toolkit, "glob_files");
         assertAbsent(toolkit, "append_file");
-        assertAbsent(toolkit, "materialize_skill");
     }
 
     private static void assertPresent(Toolkit toolkit, String name) {

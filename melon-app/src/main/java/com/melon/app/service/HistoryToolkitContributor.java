@@ -28,6 +28,7 @@ public class HistoryToolkitContributor implements ToolkitContributor {
 
     @Override
     public void contribute(String agentId, AgentConfig agentConfig, Path workspaceDir, Toolkit toolkit) {
+        if (!scrollEnabled(agentConfig)) return;
         if (!enabled(agentConfig, "recall_history")) return;
         toolkit.registerAgentTool(new RecallHistoryTool(agentId, historyStore));
     }
@@ -38,6 +39,11 @@ public class HistoryToolkitContributor implements ToolkitContributor {
         return tool == null || tool.isEnabled();
     }
 
+    private boolean scrollEnabled(AgentConfig config) {
+        if (config == null || config.getLightContextConfig() == null) return true;
+        return "scroll".equals(config.getLightContextConfig().getStrategy());
+    }
+
     private static final class RecallHistoryTool extends ToolBase {
         private final String agentId;
         private final HistoryStore historyStore;
@@ -45,7 +51,7 @@ public class HistoryToolkitContributor implements ToolkitContributor {
         RecallHistoryTool(String agentId, HistoryStore historyStore) {
             super(ToolBase.builder()
                     .name("recall_history")
-                    .description("Read the agent's durable conversation history from history.db. Actions: search, session, range, tool.")
+                    .description("Safely read the agent's durable Java history.db. Actions: search, session, range, tool. This is not a Python REPL.")
                     .inputSchema(schema())
                     .readOnly(true)
                     .concurrencySafe(true));

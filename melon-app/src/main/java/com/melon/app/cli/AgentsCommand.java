@@ -1,67 +1,145 @@
 package com.melon.app.cli;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.melon.app.cli.spec.AbstractHttpCommand;
+import com.melon.app.cli.spec.CliCommandSpecs;
+import com.melon.app.cli.spec.CliKeyValueParser;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.Parameters;
+import picocli.CommandLine.Model.CommandSpec;
+import picocli.CommandLine.Spec;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
-/**
- * CLI command to list and manage agents.
- * Calls the HTTP API GET /api/agents to retrieve agent configurations.
- */
-@Command(name = "agents", description = "Manage agents", mixinStandardHelpOptions = true)
-public class AgentsCommand implements Callable<Integer> {
-
-    @Option(names = "--port", defaultValue = "8088", description = "Melon server port")
-    int port;
+@Command(name = "agents", aliases = "agent", description = "Manage agents",
+        mixinStandardHelpOptions = true,
+        subcommands = {
+                AgentsCommand.ListAgents.class,
+                AgentsCommand.GetAgent.class,
+                AgentsCommand.CreateAgent.class,
+                AgentsCommand.UpdateAgent.class,
+                AgentsCommand.DeleteAgent.class,
+                AgentsCommand.EnableAgent.class,
+                AgentsCommand.DisableAgent.class,
+                AgentsCommand.OrderAgents.class,
+                AgentsCommand.ChatAgent.class
+        })
+public class AgentsCommand extends AbstractHttpCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
-        String url = "http://localhost:" + port + "/api/agents";
-        try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(5))
-                    .build();
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .GET()
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() == 200) {
-                System.out.println(prettyPrint(response.body()));
-            } else {
-                System.err.println("Error: HTTP " + response.statusCode());
-                if (response.body() != null && !response.body().isBlank()) {
-                    System.err.println(response.body());
-                }
-                return 1;
-            }
-        } catch (java.net.ConnectException e) {
-            System.err.println("Cannot connect to Melon server at localhost:" + port);
-            System.err.println("Is the server running? Start it with: melon app --port " + port);
-            return 1;
-        } catch (Exception e) {
-            System.err.println("Error: " + e.getMessage());
-            return 1;
-        }
-        return 0;
+        return execute(CliCommandSpecs.AGENTS_LIST);
     }
 
-    private String prettyPrint(String json) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            Object obj = mapper.readValue(json, Object.class);
-            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
-        } catch (Exception e) {
-            return json;
+    @Command(name = "list", description = "List agents", mixinStandardHelpOptions = true)
+    static class ListAgents extends AbstractHttpCommand implements Callable<Integer> {
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_LIST); }
+    }
+
+    @Command(name = "get", description = "Get an agent", mixinStandardHelpOptions = true)
+    static class GetAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_GET, Map.of("id", id), null); }
+    }
+
+    @Command(name = "create", description = "Create an agent", mixinStandardHelpOptions = true)
+    static class CreateAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Option(names = "--name") String name;
+        @Option(names = "--description") String description;
+        @Option(names = "--workspace-dir") String workspaceDir;
+        @Option(names = "--active-model") String activeModel;
+        @Option(names = "--skill", split = ",") List<String> skills;
+        @Option(names = "--disabled") boolean disabled;
+        @Option(names = "--set", description = "Additional field as key=value") List<String> fields;
+
+        @Override
+        public Integer call() {
+            Map<String, Object> body = new LinkedHashMap<>(CliKeyValueParser.parsePairs(fields));
+            body.put("id", id);
+            if (name != null) body.put("name", name);
+            if (description != null) body.put("description", description);
+            if (workspaceDir != null) body.put("workspace_dir", workspaceDir);
+            if (activeModel != null) body.put("active_model", activeModel);
+            if (skills != null) body.put("skill_names", skills);
+            body.put("enabled", !disabled);
+            return execute(CliCommandSpecs.AGENTS_CREATE, Map.of(), body);
+        }
+    }
+
+    @Command(name = "update", description = "Update an agent", mixinStandardHelpOptions = true)
+    static class UpdateAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Option(names = "--name") String name;
+        @Option(names = "--description") String description;
+        @Option(names = "--workspace-dir") String workspaceDir;
+        @Option(names = "--active-model") String activeModel;
+        @Option(names = "--skill", split = ",") List<String> skills;
+        @Option(names = "--enabled") Boolean enabled;
+        @Option(names = "--set", description = "Additional field as key=value") List<String> fields;
+
+        @Override
+        public Integer call() {
+            Map<String, Object> body = new LinkedHashMap<>(CliKeyValueParser.parsePairs(fields));
+            if (name != null) body.put("name", name);
+            if (description != null) body.put("description", description);
+            if (workspaceDir != null) body.put("workspace_dir", workspaceDir);
+            if (activeModel != null) body.put("active_model", activeModel);
+            if (skills != null) body.put("skill_names", skills);
+            if (enabled != null) body.put("enabled", enabled);
+            return execute(CliCommandSpecs.AGENTS_UPDATE, Map.of("id", id), body);
+        }
+    }
+
+    @Command(name = "delete", description = "Delete an agent", mixinStandardHelpOptions = true)
+    static class DeleteAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_DELETE, Map.of("id", id), null); }
+    }
+
+    @Command(name = "enable", description = "Enable an agent", mixinStandardHelpOptions = true)
+    static class EnableAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_TOGGLE, Map.of("id", id), Map.of("enabled", true)); }
+    }
+
+    @Command(name = "disable", description = "Disable an agent", mixinStandardHelpOptions = true)
+    static class DisableAgent extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "ID") String id;
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_TOGGLE, Map.of("id", id), Map.of("enabled", false)); }
+    }
+
+    @Command(name = "order", description = "Set agent order", mixinStandardHelpOptions = true)
+    static class OrderAgents extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(arity = "1..*", paramLabel = "ID") List<String> ids;
+        @Override
+        public Integer call() { return execute(CliCommandSpecs.AGENTS_ORDER, Map.of(), Map.of("agent_ids", ids)); }
+    }
+
+    @Command(name = "chat", description = "Chat with an agent", mixinStandardHelpOptions = true)
+    static class ChatAgent implements Callable<Integer> {
+        @Spec CommandSpec commandSpec;
+        @Parameters(index = "0", paramLabel = "AGENT") String agent;
+        @Parameters(index = "1..*", paramLabel = "TEXT", arity = "0..*") List<String> text;
+        @Option(names = {"--message", "--instruction"}) String message;
+        @Option(names = "--user-id", defaultValue = "default") String userId;
+        @Option(names = "--session-id", defaultValue = "default") String sessionId;
+        @Option(names = "--task-timeout", defaultValue = "300") double taskTimeout;
+        @Option(names = "--poll-interval", defaultValue = "1") double pollInterval;
+        @Option(names = "--no-wait") boolean noWait;
+
+        @Override
+        public Integer call() {
+            String input = message != null ? message : String.join(" ", text == null ? List.of() : text);
+            return TaskCommand.submitAndPoll(commandSpec, agent, userId, sessionId, input, taskTimeout, pollInterval, noWait);
         }
     }
 }

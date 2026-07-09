@@ -16,12 +16,15 @@ public final class ToolsConfigSelfCheck {
             "get_current_time",
             "set_user_timezone",
             "get_token_usage",
+            "create_cron_job",
             "delegate_external_agent",
             "list_agents",
             "chat_with_agent",
             "submit_to_agent",
             "check_agent_task",
-            "spawn_subagent"
+            "spawn_subagent",
+            "recall_history",
+            "materialize_skill"
     );
 
     private ToolsConfigSelfCheck() {
@@ -34,6 +37,7 @@ public final class ToolsConfigSelfCheck {
         assertVisible(tools, "execute_shell_command");
         assertVisible(tools, "grep_search");
         assertVisible(tools, "glob_search");
+        assertVisible(tools, "materialize_skill");
         assertHidden(tools, "view_image");
         assertHidden(tools, "view_video");
         assertDisabled(tools, "delegate_external_agent");

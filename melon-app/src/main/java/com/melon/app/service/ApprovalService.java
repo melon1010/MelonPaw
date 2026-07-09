@@ -98,6 +98,13 @@ public class ApprovalService {
         return Mono.fromFuture(session.future());
     }
 
+    public boolean cancelPendingApproval(String sessionId) {
+        PendingApprovalSession session = pendingApprovalSessions.remove(sessionId);
+        if (session == null) return false;
+        session.cancel();
+        return true;
+    }
+
     public boolean decidePendingApproval(String sessionId, String requestId, boolean approved) {
         return decidePendingApproval(sessionId, requestId, approved, null);
     }
@@ -111,7 +118,8 @@ public class ApprovalService {
             Map<String, Object> approval = decision.approval() != null ? decision.approval() : Map.of();
             String agentId = stringValue(approval.getOrDefault("agent_id", fallbackAgentId), "default");
             String sid = stringValue(approval.getOrDefault("session_id", sessionId), "default");
-            String toolName = stringValue(approval.getOrDefault("tool_name", decision.toolCall().getName()), "unknown");
+            String toolName = stringValue(approval.getOrDefault("actual_tool_name",
+                    approval.getOrDefault("tool_name", decision.toolCall().getName())), "unknown");
             auditLogService.recordApproval(agentId, sid, toolName,
                     approval.getOrDefault("tool_params", decision.toolCall().getInput()),
                     approved,
@@ -155,6 +163,10 @@ public class ApprovalService {
     public void rejectPlan(String sessionId, String reason) {
         pendingPlans.remove(sessionId);
         log.info("Plan rejected for session: {} (reason: {})", sessionId, reason);
+    }
+
+    public boolean cancelPendingPlan(String sessionId) {
+        return pendingPlans.remove(sessionId) != null;
     }
 
     private static final class PendingApprovalSession {

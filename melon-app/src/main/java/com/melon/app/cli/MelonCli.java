@@ -1,13 +1,18 @@
 package com.melon.app.cli;
 
 import picocli.CommandLine;
+import com.melon.app.cli.context.CliOptions;
 import picocli.CommandLine.Command;
+import picocli.CommandLine.Mixin;
+import picocli.CommandLine.Model.CommandSpec;
+import picocli.CommandLine.Spec;
 
-/**
- * Picocli 根命令组. 对应 Python cli/main.py 的 LazyGroup.
- */
+import java.util.Arrays;
+import java.util.concurrent.Callable;
+
+/** Picocli root command group. */
 @Command(
-    name = "melon",
+    name = "melonpaw",
     mixinStandardHelpOptions = true,
     subcommands = {
         AppCommand.class,
@@ -18,20 +23,53 @@ import picocli.CommandLine.Command;
         ModelsCommand.class,
         DoctorCommand.class,
         CronCommand.class,
-        EnvCommand.class
+        EnvCommand.class,
+        ChatsCommand.class,
+        ChannelsCommand.class,
+        PluginCommand.class,
+        CleanCommand.class,
+        ShutdownCommand.class,
+        TaskCommand.class,
+        AcpCommand.class,
+        DesktopCommand.class,
+        AuthCommand.class,
+        DaemonCommand.class,
+        UpdateCommand.class,
+        UninstallCommand.class,
+        TuiCommand.class,
+        AutoCommand.class
     },
-    description = "Melon - AI Agent powered by AgentScope 2.0"
+    description = "MelonPaw - AI Agent powered by AgentScope 2.0"
 )
-public class MelonCli implements Runnable {
+public class MelonCli implements Callable<Integer> {
+
+    @Spec
+    CommandSpec spec;
+
+    @Mixin
+    CliOptions cliOptions;
+
+    public CliOptions getCliOptions() {
+        return cliOptions;
+    }
 
     @Override
-    public void run() {
-        System.out.println("Usage: melon <command> [options]");
-        System.out.println("Commands: app, init, agents, config, skills, models, doctor, cron, env");
+    public Integer call() {
+        return TuiCommand.runDefault(spec);
     }
 
     public static void main(String[] args) {
-        int exitCode = new CommandLine(new MelonCli()).execute(args);
+        int exitCode = new CommandLine(new MelonCli()).execute(expandBareProjectArgs(args));
         System.exit(exitCode);
+    }
+
+    static String[] expandBareProjectArgs(String[] args) {
+        if (args.length == 0 || args[0].startsWith("-") || !TuiCommand.looksLikeProjectPath(args[0])) {
+            return args;
+        }
+        String[] expanded = Arrays.copyOf(args, args.length + 1);
+        System.arraycopy(expanded, 0, expanded, 1, args.length);
+        expanded[0] = "tui";
+        return expanded;
     }
 }

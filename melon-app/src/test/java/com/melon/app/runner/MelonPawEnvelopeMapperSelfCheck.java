@@ -112,6 +112,37 @@ public final class MelonPawEnvelopeMapperSelfCheck {
             throw new AssertionError("output text missing: " + resultData);
         }
 
+        MelonPawEnvelopeMapper officialToolMapper = new MelonPawEnvelopeMapper("s3");
+        List<Map<String, Object>> officialPayloads = new ArrayList<>();
+        collect(officialPayloads, officialToolMapper.start());
+        collect(officialPayloads, officialToolMapper.translate(new ToolCallStartEvent("r3", "call_agent", "agent_spawn")));
+        collect(officialPayloads, officialToolMapper.translate(new ToolCallDeltaEvent("r3", "call_agent", "agent_spawn",
+                "{\"agent_id\":\"general-purpose\",\"task\":\"inspect code\",\"timeout_seconds\":0}")));
+        collect(officialPayloads, officialToolMapper.translate(new ToolCallEndEvent("r3", "call_agent", "agent_spawn")));
+        collect(officialPayloads, officialToolMapper.finish());
+        Map<String, Object> officialToolCall = officialPayloads.stream()
+                .filter(p -> "message".equals(p.get("object")))
+                .filter(p -> "plugin_call".equals(p.get("type")))
+                .filter(p -> "completed".equals(p.get("status")))
+                .findFirst()
+                .orElseThrow();
+        Map<?, ?> officialCallData = data(officialToolCall);
+        if (!"submit_to_agent".equals(officialCallData.get("name"))) {
+            throw new AssertionError("official subagent tool name not frontend-compatible: " + officialCallData);
+        }
+        Map<?, ?> officialArgs = JSON.readValue(String.valueOf(officialCallData.get("arguments")), MAP);
+        if (!"general-purpose".equals(officialArgs.get("to_agent"))
+                || !"inspect code".equals(officialArgs.get("text"))
+                || !Integer.valueOf(0).equals(officialArgs.get("timeout"))) {
+            throw new AssertionError("official subagent args not frontend-compatible: " + officialArgs);
+        }
+
+        Map<String, Object> skillArgs = FrontendToolCompat.parseArguments("materialize_skill",
+                "{\"skill_name\":\"pptx\",\"file_path\":\"SKILL.md\"}");
+        if (!"pptx".equals(skillArgs.get("name")) || !"pptx".equals(skillArgs.get("skill_name"))) {
+            throw new AssertionError("materialize_skill args not frontend-compatible: " + skillArgs);
+        }
+
     }
 
     private static List<?> verifyCompletedOutput(List<Map<String, Object>> payloads, int minSize) {

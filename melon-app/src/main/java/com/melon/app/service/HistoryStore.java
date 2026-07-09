@@ -5,6 +5,7 @@ import com.melon.core.config.ConfigManager;
 import com.melon.core.config.LightContextConfig;
 import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,12 +22,19 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.melon.core.util.ValueUtils.stringValue;
 
@@ -37,9 +45,30 @@ public class HistoryStore {
     private static final Set<String> RECALL_TOOL_NAMES = Set.of("recall_history_python", "execute_python");
 
     private final ConfigManager configManager;
+    private final Set<Path> initializedDbs = ConcurrentHashMap.newKeySet();
+    private final ExecutorService writer = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "melon-history-writer");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final AtomicInteger pendingWrites = new AtomicInteger();
+    private final Object idleMonitor = new Object();
 
     public HistoryStore(ConfigManager configManager) {
         this.configManager = configManager;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        writer.shutdown();
+        try {
+            if (!writer.awaitTermination(5, TimeUnit.SECONDS)) {
+                writer.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            writer.shutdownNow();
+        }
     }
 
     public Path historyPath(String agentId) {
@@ -54,23 +83,88 @@ public class HistoryStore {
     }
 
     public void appendSession(String agentId, String sessionId, Map<String, Object> state) {
-        AgentConfig agent = configManager.getConfig().getAgent(normalizeAgentId(agentId));
-        if (agent != null && agent.getLightContextConfig() != null
-                && !"scroll".equals(agent.getLightContextConfig().getStrategy())) {
-            return;
-        }
+        if (!scrollEnabled(agentId)) return;
         Object raw = state != null ? state.get("context") : null;
         if (!(raw instanceof List<?> context) || context.isEmpty()) return;
         List<Entry> entries = entries(normalizeAgentId(agentId), valueOrDefault(sessionId, "default"), context);
         if (entries.isEmpty()) return;
         Path db = historyPath(agentId);
         try (Connection conn = open(db)) {
-            for (Entry entry : entries) {
-                append(conn, entry);
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                for (Entry entry : entries) {
+                    append(conn, entry);
+                }
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
             }
         } catch (Exception e) {
             log.warn("history write-through failed: agent={}, session={}", agentId, sessionId, e);
         }
+    }
+
+    public void appendSessionAsync(String agentId, String sessionId, Map<String, Object> state) {
+        pendingWrites.incrementAndGet();
+        try {
+            writer.execute(() -> {
+                try {
+                    appendSession(agentId, sessionId, state);
+                } finally {
+                    markIdle();
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            markIdle();
+            log.warn("history async writer rejected task: agent={}, session={}", agentId, sessionId, e);
+        }
+    }
+
+    public boolean awaitIdle(long timeoutMillis) {
+        long deadline = System.currentTimeMillis() + Math.max(1, timeoutMillis);
+        synchronized (idleMonitor) {
+            while (pendingWrites.get() > 0) {
+                long wait = deadline - System.currentTimeMillis();
+                if (wait <= 0) return false;
+                try {
+                    idleMonitor.wait(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    public int syncWorkspaceSessions(String agentId) {
+        if (!scrollEnabled(agentId)) return 0;
+        Path sessionsDir = configManager.resolveWorkspaceDir(normalizeAgentId(agentId)).resolve("sessions");
+        if (!Files.isDirectory(sessionsDir)) return 0;
+        int[] inserted = {0};
+        try (var stream = Files.find(sessionsDir, 3,
+                (path, attrs) -> attrs.isRegularFile() && path.getFileName().toString().endsWith(".json"))) {
+            stream.forEach(path -> inserted[0] += syncSessionFile(agentId, path));
+        } catch (Exception e) {
+            log.warn("history session sync failed: agent={}, dir={}", agentId, sessionsDir, e);
+        }
+        return inserted[0];
+    }
+
+    public int purgeExpired(String agentId) {
+        AgentConfig agent = configManager.getConfig().getAgent(normalizeAgentId(agentId));
+        int days = agent != null && agent.getLightContextConfig() != null
+                && agent.getLightContextConfig().getScrollConfig() != null
+                ? agent.getLightContextConfig().getScrollConfig().getHistoryRetentionDays()
+                : 30;
+        if (days <= 0) return 0;
+        String before = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(ZoneOffset.UTC)
+                .format(Instant.now().minus(days, ChronoUnit.DAYS));
+        return purge(agentId, before);
     }
 
     public int count(String agentId, String sessionId) {
@@ -229,12 +323,48 @@ public class HistoryStore {
     }
 
     public int purge(String agentId, String beforeIso) {
-        String sql = "DELETE FROM conversation_history WHERE agent_id = ? AND created_at < ?";
-        try (Connection conn = open(historyPath(agentId));
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, normalizeAgentId(agentId));
-            ps.setString(2, beforeIso);
-            return ps.executeUpdate();
+        String where = "agent_id = ? AND created_at IS NOT NULL AND created_at < ?";
+        try (Connection conn = open(historyPath(agentId))) {
+            boolean autoCommit = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try {
+                List<Map<String, Object>> doomed;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT seq, content FROM conversation_history WHERE " + where)) {
+                    ps.setString(1, normalizeAgentId(agentId));
+                    ps.setString(2, beforeIso);
+                    doomed = rows(ps.executeQuery());
+                }
+                if (doomed.isEmpty()) {
+                    conn.commit();
+                    return 0;
+                }
+                if (hasFts(conn)) {
+                    try (PreparedStatement fts = conn.prepareStatement(
+                            "INSERT INTO conversation_history_fts(conversation_history_fts, rowid, content) VALUES('delete', ?, ?)")) {
+                        for (Map<String, Object> row : doomed) {
+                            fts.setObject(1, row.get("seq"));
+                            fts.setString(2, valueOrDefault(stringValue(row.get("content")), ""));
+                            fts.addBatch();
+                        }
+                        fts.executeBatch();
+                    } catch (SQLException e) {
+                        log.debug("history FTS purge sync skipped", e);
+                    }
+                }
+                try (PreparedStatement ps = conn.prepareStatement("DELETE FROM conversation_history WHERE " + where)) {
+                    ps.setString(1, normalizeAgentId(agentId));
+                    ps.setString(2, beforeIso);
+                    int deleted = ps.executeUpdate();
+                    conn.commit();
+                    return deleted;
+                }
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
         } catch (Exception e) {
             log.warn("history purge failed: agent={}, before={}", agentId, beforeIso, e);
             return 0;
@@ -243,25 +373,54 @@ public class HistoryStore {
 
     private Connection open(Path db) throws SQLException, IOException {
         Files.createDirectories(db.getParent());
-        try {
-            return openChecked(db);
-        } catch (SQLException e) {
-            quarantine(db);
-            return openChecked(db);
+        Path key = db.toAbsolutePath().normalize();
+        boolean needsInit = !initializedDbs.contains(key) || !Files.exists(db);
+        if (!needsInit) {
+            try {
+                return openChecked(db, false);
+            } catch (SQLException e) {
+                if (!isCorruption(e)) throw e;
+                synchronized (initializedDbs) {
+                    quarantine(db);
+                    initializedDbs.remove(key);
+                    Connection conn = openChecked(db, true);
+                    initializedDbs.add(key);
+                    return conn;
+                }
+            }
+        }
+        synchronized (initializedDbs) {
+            if (initializedDbs.contains(key) && Files.exists(db)) {
+                return openChecked(db, false);
+            }
+            try {
+                Connection conn = openChecked(db, true);
+                initializedDbs.add(key);
+                return conn;
+            } catch (SQLException e) {
+                if (!isCorruption(e)) throw e;
+                quarantine(db);
+                initializedDbs.remove(key);
+                Connection conn = openChecked(db, true);
+                initializedDbs.add(key);
+                return conn;
+            }
         }
     }
 
-    private Connection openChecked(Path db) throws SQLException {
+    private Connection openChecked(Path db, boolean checkAndInit) throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + db);
         try (Statement st = conn.createStatement()) {
             st.execute("PRAGMA journal_mode=WAL");
             st.execute("PRAGMA busy_timeout=5000");
-            try (ResultSet rs = st.executeQuery("PRAGMA quick_check")) {
-                if (!rs.next() || !"ok".equalsIgnoreCase(rs.getString(1))) {
-                    throw new SQLException("quick_check failed");
+            if (checkAndInit) {
+                try (ResultSet rs = st.executeQuery("PRAGMA quick_check")) {
+                    if (!rs.next() || !"ok".equalsIgnoreCase(rs.getString(1))) {
+                        throw new SQLException("quick_check failed", "SQLITE_CORRUPT", 11);
+                    }
                 }
+                initSchema(st);
             }
-            initSchema(st);
             return conn;
         } catch (SQLException e) {
             try {
@@ -297,10 +456,14 @@ public class HistoryStore {
         st.execute("CREATE INDEX IF NOT EXISTS ch_kind ON conversation_history(kind)");
         st.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_dedup ON conversation_history(session_id, dedup_key)");
         try {
+            boolean existed = tableExists(st, "conversation_history_fts");
             st.execute("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS conversation_history_fts
                     USING fts5(content, content='conversation_history', content_rowid='seq', tokenize='porter unicode61')
                     """);
+            if (!existed) {
+                st.execute("INSERT INTO conversation_history_fts(conversation_history_fts) VALUES('rebuild')");
+            }
         } catch (SQLException e) {
             log.debug("SQLite FTS5 unavailable; history search will use LIKE", e);
         }
@@ -330,7 +493,8 @@ public class HistoryStore {
             ps.setString(13, entry.createdAt());
             ps.setString(14, entry.dedupKey());
             int changed = ps.executeUpdate();
-            if (changed == 0 || !hasFts(conn) || RECALL_TOOL_NAMES.contains(entry.name())) return;
+            String name = entry.name();
+            if (changed == 0 || !hasFts(conn) || (name != null && RECALL_TOOL_NAMES.contains(name))) return;
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 if (keys.next()) {
                     try (PreparedStatement fts = conn.prepareStatement(
@@ -449,6 +613,34 @@ public class HistoryStore {
         }
     }
 
+    private int syncSessionFile(String agentId, Path file) {
+        Map<String, Object> raw = JsonUtils.loadAsMap(file);
+        Map<String, Object> state = stateFromSessionShadow(raw);
+        Object context = state.get("context");
+        if (!(context instanceof List<?> list) || list.isEmpty()) return 0;
+        String sessionId = sessionIdFromFile(file);
+        int before = count(agentId, sessionId);
+        appendSession(agentId, sessionId, state);
+        return Math.max(0, count(agentId, sessionId) - before);
+    }
+
+    private Map<String, Object> stateFromSessionShadow(Map<String, Object> raw) {
+        if (raw == null || raw.isEmpty()) return Map.of();
+        Object agentRaw = raw.get("agent");
+        if (agentRaw instanceof Map<?, ?> agentMap) {
+            Object stateRaw = asMap(agentMap).get("state");
+            if (stateRaw instanceof Map<?, ?> stateMap) return asMap(stateMap);
+        }
+        return raw;
+    }
+
+    private String sessionIdFromFile(Path file) {
+        String name = file.getFileName().toString();
+        if (name.endsWith(".json")) name = name.substring(0, name.length() - ".json".length());
+        int marker = name.indexOf('_');
+        return marker >= 0 && marker + 1 < name.length() ? name.substring(marker + 1) : name;
+    }
+
     private boolean hasFts(Connection conn) {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_history_fts'");
@@ -477,6 +669,39 @@ public class HistoryStore {
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[\\p{L}\\p{N}_]+").matcher(query);
         while (matcher.find()) terms.add("\"" + matcher.group() + "\"");
         return String.join(" OR ", terms);
+    }
+
+    private boolean tableExists(Statement st, String table) throws SQLException {
+        try (PreparedStatement ps = st.getConnection().prepareStatement(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")) {
+            ps.setString(1, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private boolean isCorruption(SQLException e) {
+        if (e.getErrorCode() == 11 || e.getErrorCode() == 26) return true;
+        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        return message.contains("quick_check failed")
+                || message.contains("database disk image is malformed")
+                || message.contains("file is not a database")
+                || message.contains("database corruption");
+    }
+
+    private void markIdle() {
+        if (pendingWrites.decrementAndGet() <= 0) {
+            synchronized (idleMonitor) {
+                idleMonitor.notifyAll();
+            }
+        }
+    }
+
+    private boolean scrollEnabled(String agentId) {
+        AgentConfig agent = configManager.getConfig().getAgent(normalizeAgentId(agentId));
+        if (agent == null || agent.getLightContextConfig() == null) return true;
+        return "scroll".equals(agent.getLightContextConfig().getStrategy());
     }
 
     private String messageId(String dedupKey) {

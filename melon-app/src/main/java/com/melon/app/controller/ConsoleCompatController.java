@@ -18,6 +18,7 @@ import com.melon.tools.agent.AgentChatBridge;
 import com.melon.tools.agent.SubmitToAgentTool;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -140,8 +141,65 @@ public class ConsoleCompatController {
     }
 
     @PostMapping("/chat/stop")
-    public Mono<ResponseEntity<?>> stopChat(@RequestParam(value = "chat_id", required = false) String chatId) {
-        return Mono.just(ResponseEntity.ok(Map.of("stopped", true, "chat_id", chatId != null ? chatId : "")));
+    public Mono<ResponseEntity<?>> stopChat(
+            @RequestParam(value = "chat_id", required = false) String chatIdParam,
+            @RequestParam(value = "session_id", required = false) String sessionIdParam,
+            @RequestParam(value = "user_id", required = false) String userIdParam,
+            @RequestHeader(value = "X-Agent-Id", defaultValue = "default") String agentId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> payload = body != null ? body : Map.of();
+        String effectiveAgentId = stringValue(payload.get("agent_id"), agentId);
+        String chatId = stringValue(payload.get("chat_id"), stringValue(chatIdParam, ""));
+        ChatSpec chat = chatManager.get(effectiveAgentId, chatId);
+        String chatSessionId = stringValue(chat != null ? chat.getSessionId() : null, "default");
+        String chatUserId = stringValue(chat != null ? chat.getUserId() : null,
+                headerUserId != null ? headerUserId : "default");
+        String sessionId = stringValue(payload.get("session_id"),
+                stringValue(sessionIdParam, chatSessionId));
+        String userId = stringValue(payload.get("user_id"),
+                stringValue(userIdParam, chatUserId));
+
+        boolean interrupted = false;
+        String detail = "";
+        try {
+            HarnessAgent agent = multiAgentManager.getAgent(effectiveAgentId);
+            if (agent != null) {
+                agent.getDelegate().interrupt(userId, sessionId);
+                interrupted = true;
+            } else {
+                detail = "agent is not running";
+            }
+        } catch (Exception e) {
+            log.warn("Failed to interrupt chat: agent={}, user={}, session={}, chat={}",
+                    effectiveAgentId, userId, sessionId, chatId, e);
+            return Mono.just(ResponseEntity.internalServerError().body(Map.of(
+                    "stopped", false,
+                    "interrupted", false,
+                    "chat_id", chatId,
+                    "agent_id", effectiveAgentId,
+                    "session_id", sessionId,
+                    "user_id", userId,
+                    "detail", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()
+            )));
+        }
+
+        boolean approvalCancelled = approvalService.cancelPendingApproval(sessionId);
+        boolean planCancelled = approvalService.cancelPendingPlan(sessionId);
+        if (!chatId.isBlank()) {
+            chatManager.setStatus(effectiveAgentId, chatId, "idle");
+        }
+        return Mono.just(ResponseEntity.ok(Map.of(
+                "stopped", true,
+                "interrupted", interrupted,
+                "approval_cancelled", approvalCancelled,
+                "plan_cancelled", planCancelled,
+                "chat_id", chatId,
+                "agent_id", effectiveAgentId,
+                "session_id", sessionId,
+                "user_id", userId,
+                "detail", detail
+        )));
     }
 
     @PostMapping("/chat/task")
@@ -167,7 +225,8 @@ public class ConsoleCompatController {
                 sessionId,
                 rootAgentId,
                 rootSessionId,
-                300
+                300,
+                requestContext
         );
         SubmitToAgentTool.TaskEntry entry = SubmitToAgentTool.submit(request, taskTimeout);
         return Mono.just(ResponseEntity.ok(Map.of("task_id", entry.getTaskId())));

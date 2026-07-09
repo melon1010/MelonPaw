@@ -24,6 +24,10 @@ public final class FrontendToolCompat {
         if ("execute".equals(name)) return "execute_shell_command";
         if ("grep_files".equals(name)) return "grep_search";
         if ("glob_files".equals(name)) return "glob_search";
+        if ("agent_spawn".equals(name)) return "submit_to_agent";
+        if ("agent_send".equals(name)) return "chat_with_agent";
+        if ("agent_list".equals(name)) return "list_agents";
+        if ("task_output".equals(name) || "task_list".equals(name) || "task_cancel".equals(name)) return "check_agent_task";
         return name;
     }
 
@@ -53,6 +57,19 @@ public final class FrontendToolCompat {
         String displayName = displayToolName(toolName);
         if ("execute_shell_command".equals(displayName)) {
             copyIfPresent(normalized, "working_directory", "cwd");
+        } else if ("submit_to_agent".equals(displayName)) {
+            copyIfPresent(normalized, "agent_id", "to_agent");
+            copyIfPresent(normalized, "task", "text");
+            copyIfPresent(normalized, "timeout_seconds", "timeout");
+        } else if ("chat_with_agent".equals(displayName)) {
+            copyIfPresent(normalized, "agent_id", "to_agent");
+            copyIfPresent(normalized, "label", "to_agent");
+            copyIfPresent(normalized, "agent_key", "to_agent");
+            copyIfPresent(normalized, "message", "text");
+            copyIfPresent(normalized, "timeout_seconds", "timeout");
+        } else if ("materialize_skill".equals(displayName)) {
+            copyIfPresent(normalized, "skill_name", "name");
+            copyIfPresent(normalized, "name", "skill_name");
         } else if (isFileTool(displayName)) {
             copyIfPresent(normalized, "path", "file_path");
             copyIfPresent(normalized, "file_path", "path");
@@ -112,7 +129,16 @@ public final class FrontendToolCompat {
         copyExtractedString(text, args, "path");
         copyExtractedString(text, args, "file_path");
         copyExtractedString(text, args, "pattern");
+        copyExtractedString(text, args, "agent_id");
+        copyExtractedString(text, args, "agent_key");
+        copyExtractedString(text, args, "label");
+        copyExtractedString(text, args, "task");
+        copyExtractedString(text, args, "message");
+        copyExtractedString(text, args, "task_id");
+        copyExtractedString(text, args, "skill_name");
+        copyExtractedString(text, args, "name");
         Long timeout = extractNumber(text, "timeout");
+        if (timeout == null) timeout = extractNumber(text, "timeout_seconds");
         if (timeout != null) args.put("timeout", timeout);
         return args;
     }

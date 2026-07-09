@@ -163,14 +163,16 @@ public class AgentRunner {
         Object ownerRaw = ctx != null ? ctx.get("root_agent_id") : null;
         String aid = stringValue(agentId, "default");
         String ownerAid = ownerRaw != null && !String.valueOf(ownerRaw).isBlank() ? String.valueOf(ownerRaw) : aid;
+        String displayToolName = FrontendToolCompat.displayToolName(toolCall.getName());
         Map<String, Object> approval = new java.util.LinkedHashMap<>();
         approval.put("request_id", toolCall.getId());
         approval.put("session_id", sid);
         approval.put("root_session_id", rootSid);
         approval.put("agent_id", aid);
         approval.put("owner_agent_id", ownerAid);
-        approval.put("tool_name", toolCall.getName());
-        approval.put("tool_display_name", toolCall.getName());
+        approval.put("tool_name", displayToolName);
+        approval.put("tool_display_name", displayToolName);
+        approval.put("actual_tool_name", toolCall.getName());
         approval.put("tool_source", "agentscope");
         approval.put("severity", "medium");
         approval.put("findings_count", 1);

@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class ExternalChannelAdaptersSelfCheck {
@@ -131,6 +132,7 @@ public final class ExternalChannelAdaptersSelfCheck {
         AtomicReference<String> wechatAuthType = new AtomicReference<>("");
         AtomicReference<String> wechatUin = new AtomicReference<>("");
         AtomicReference<String> wechatSend = new AtomicReference<>("");
+        AtomicInteger wechatTyping = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/ilink/bot/get_bot_qrcode", exchange -> {
             wechatAuthType.set(exchange.getRequestHeaders().getFirst("AuthorizationType"));
@@ -144,6 +146,20 @@ public final class ExternalChannelAdaptersSelfCheck {
         });
         server.createContext("/ilink/bot/sendmessage", exchange -> {
             wechatSend.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] ok = "{\"ret\":0,\"errcode\":0}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, ok.length);
+            exchange.getResponseBody().write(ok);
+            exchange.close();
+        });
+        server.createContext("/ilink/bot/getconfig", exchange -> {
+            byte[] ok = "{\"ret\":0,\"errcode\":0,\"typing_ticket\":\"ticket-1\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, ok.length);
+            exchange.getResponseBody().write(ok);
+            exchange.close();
+        });
+        server.createContext("/ilink/bot/sendtyping", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            if (body.contains("ticket-1")) wechatTyping.incrementAndGet();
             byte[] ok = "{\"ret\":0,\"errcode\":0}".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, ok.length);
             exchange.getResponseBody().write(ok);
@@ -190,6 +206,8 @@ public final class ExternalChannelAdaptersSelfCheck {
                 throw new AssertionError("WeChat QR status should activate persisted credentials: " + qrStatus);
             }
 
+            reflectWechatStartTyping(registry.get("wechat"), wechat, Map.of("enabled", true, "bot_token", "token1", "base_url", baseUrl));
+
             ChannelOutboundMessage wxOut = new ChannelOutboundMessage();
             wxOut.setAgentId("default");
             wxOut.setChannel("wechat");
@@ -202,6 +220,9 @@ public final class ExternalChannelAdaptersSelfCheck {
             if (!wechatSend.get().contains("\"context_token\":\"ctx\"")
                     || !"sent".equals(wxOut.getMeta().get("delivery_status"))) {
                 throw new AssertionError("WeChat outbound failed: " + wxOut.getMeta() + " body=" + wechatSend.get());
+            }
+            if (wechatTyping.get() < 2) {
+                throw new AssertionError("WeChat typing keepalive should start and stop around outbound send");
             }
 
             VoiceChannelAdapter voice = (VoiceChannelAdapter) registry.get("voice");
@@ -241,5 +262,11 @@ public final class ExternalChannelAdaptersSelfCheck {
         Method method = target.getClass().getDeclaredMethod(methodName);
         method.setAccessible(true);
         return String.valueOf(method.invoke(target));
+    }
+
+    private static void reflectWechatStartTyping(ChannelAdapter adapter, ChannelInboundMessage inbound, Map<String, Object> config) throws Exception {
+        Method method = adapter.getClass().getDeclaredMethod("startTyping", String.class, ChannelInboundMessage.class, Map.class);
+        method.setAccessible(true);
+        method.invoke(adapter, "default", inbound, config);
     }
 }

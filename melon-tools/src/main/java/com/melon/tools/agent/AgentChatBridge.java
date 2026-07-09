@@ -29,8 +29,14 @@ public final class AgentChatBridge {
             String sessionId,
             String fromAgent,
             String rootSessionId,
-            long timeoutSeconds
-    ) {}
+            long timeoutSeconds,
+            Map<String, Object> context
+    ) {
+        public AgentRequest(String toAgent, String text, String sessionId, String fromAgent,
+                            String rootSessionId, long timeoutSeconds) {
+            this(toAgent, text, sessionId, fromAgent, rootSessionId, timeoutSeconds, Map.of());
+        }
+    }
 
     private static volatile AgentExecutor executor;
 

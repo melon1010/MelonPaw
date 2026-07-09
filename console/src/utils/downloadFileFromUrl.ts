@@ -1,5 +1,5 @@
 /**
- * Cross-runtime file download helper for browser and legacy pywebview.
+ * Cross-runtime file download helper for browser and the legacy pywebview shell.
  */
 import { isHttpExternalUrl, resolveExternalUrl } from "./openExternalLink";
 import { getPyWebViewApi, type PyWebViewSaveFile } from "./pywebview";

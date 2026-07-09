@@ -33,18 +33,6 @@
     "yes": "Yes",
     "no": "No"
   },
-  "desktop": {
-    "closeWindow": {
-      "title": "Close Window",
-      "description": "What would you like to do when closing the window? Quitting the app stops all running tasks and scheduled jobs.",
-      "remember": "Remember my choice",
-      "showWindow": "Show Window",
-      "minimizeToTray": "Minimize to Tray",
-      "quitApp": "Quit App",
-      "preference": "Close Window",
-      "askEveryTime": "Ask every time"
-    }
-  },
   "chunkError": {
     "title": "Failed to load page",
     "subTitle": "This may be caused by a network issue or an application update.",
@@ -86,34 +74,7 @@
     "newVersion": "New version available: v{{version}}, click to upgrade",
     "updateModal": {
       "title": "New version available: v{{version}}",
-      "viewReleases": "View Releases",
-      "installDesktopUpdate": "Update Now",
-      "desktopInstallHint": "QwenPaw Desktop {{version}} is ready to install. The app will restart after the update.",
-      "checking": "Checking for updates…",
-      "checkingHint": "Confirming the latest release",
-      "downloading": "Downloading update",
-      "downloadingTo": "Updating to version {{version}}",
-      "downloadProgress": "{{done}} / {{total}} · {{rate}}",
-      "installing": "Installing update",
-      "willRestart": "The app will restart automatically when done.",
-      "stepPrepare": "Prepare",
-      "stepDownloading": "Download",
-      "stepInstalling": "Install",
-      "failedTitle": "Update failed",
-      "back": "Back",
-      "retry": "Retry",
-      "errors": {
-        "network": "Couldn't reach the update server. Check your internet and try again.",
-        "signature": "Update file signature invalid. Try downloading again.",
-        "appLocation": "QwenPaw is running from a read-only macOS location. Move QwenPaw.app to the Applications folder, launch it from there, then try updating again.",
-        "other": "Update failed."
-      },
-      "updateLater": "Download in Background",
-      "backgroundDownloading": "Downloading in background…",
-      "readyToInstall": "Update ready",
-      "readyToInstallHint": "v{{version}} update is downloaded. Restart to install and launch the new version.",
-      "restartNow": "Update Now",
-      "backgroundFailed": "Background download failed"
+      "viewReleases": "View Releases"
     },
     "settings": {
       "language": "Language",

@@ -1,5 +1,6 @@
 package com.melon.app.cli;
 
+import com.melon.app.cli.paths.CliPathResolver;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -10,7 +11,6 @@ import java.util.concurrent.Callable;
 
 /**
  * CLI command to initialize a Melon workspace.
- * Creates the .melon directory structure, AGENTS.md template, and config.yaml.
  */
 @Command(name = "init", description = "Initialize Melon workspace", mixinStandardHelpOptions = true)
 public class InitCommand implements Callable<Integer> {
@@ -18,58 +18,52 @@ public class InitCommand implements Callable<Integer> {
     @Option(names = "--dir", defaultValue = ".", description = "Workspace directory")
     String dir;
 
+    @Option(names = "--force", description = "Overwrite existing generated files")
+    boolean force;
+
+    @Option(names = "--defaults", description = "Use defaults only, no interactive prompts")
+    boolean defaults;
+
+    @Option(names = "--accept-security", description = "Accept security notice for non-interactive init")
+    boolean acceptSecurity;
+
     @Override
     public Integer call() {
-        Path workspace = Path.of(dir).toAbsolutePath().normalize();
+        Path workspace = CliPathResolver.expandUser(dir);
+        CliPathResolver paths = new CliPathResolver();
         System.out.println("Initializing Melon workspace at " + workspace);
+        System.out.println("Melon home: " + paths.homeDir());
         System.out.println();
 
         try {
-            // 1. Create .melon directory structure in workspace
             Path melonDir = workspace.resolve(".melon");
-            Files.createDirectories(melonDir);
-            System.out.println("  Created " + melonDir);
+            Files.createDirectories(melonDir.resolve("skills"));
+            Files.createDirectories(melonDir.resolve("state"));
+            Files.createDirectories(paths.homeDir().resolve("skills"));
+            Files.createDirectories(paths.cacheDir());
+            Files.createDirectories(paths.logDir());
 
-            Path skillsDir = melonDir.resolve("skills");
-            Files.createDirectories(skillsDir);
-            System.out.println("  Created " + skillsDir);
-
-            Path stateDir = melonDir.resolve("state");
-            Files.createDirectories(stateDir);
-            System.out.println("  Created " + stateDir);
-
-            // 2. Create AGENTS.md template
-            Path agentsMd = workspace.resolve("AGENTS.md");
-            if (!Files.exists(agentsMd)) {
-                Files.writeString(agentsMd, AGENTS_MD_TEMPLATE);
-                System.out.println("  Created " + agentsMd);
-            } else {
-                System.out.println("  Skipped (already exists): " + agentsMd);
-            }
-
-            // 3. Create config.yaml
-            Path configYml = melonDir.resolve("config.yaml");
-            if (!Files.exists(configYml)) {
-                Files.writeString(configYml, CONFIG_YML_TEMPLATE);
-                System.out.println("  Created " + configYml);
-            } else {
-                System.out.println("  Skipped (already exists): " + configYml);
-            }
-
-            // 4. Ensure global ~/.melon directory structure exists
-            Path homeMelon = Path.of(System.getProperty("user.home"), ".melon");
-            Files.createDirectories(homeMelon.resolve("skills"));
-            System.out.println("  Ensured global directory structure at " + homeMelon);
+            writeIfNeeded(workspace.resolve("AGENTS.md"), AGENTS_MD_TEMPLATE, force);
+            writeIfNeeded(melonDir.resolve("config.yaml"), CONFIG_YML_TEMPLATE, force);
+            writeIfNeeded(paths.configPath(), CONFIG_YML_TEMPLATE, force);
 
             System.out.println();
             System.out.println("Melon workspace initialized successfully.");
-            System.out.println("  Edit " + agentsMd + " to customize your agent.");
-            System.out.println("  Edit " + configYml + " to configure models and tools.");
         } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
             return 1;
         }
         return 0;
+    }
+
+    private void writeIfNeeded(Path path, String content, boolean forceWrite) throws IOException {
+        if (Files.exists(path) && !forceWrite) {
+            System.out.println("  Skipped (already exists): " + path);
+            return;
+        }
+        Files.createDirectories(path.getParent());
+        Files.writeString(path, content);
+        System.out.println("  Created " + path);
     }
 
     private static final String AGENTS_MD_TEMPLATE = """
@@ -95,7 +89,7 @@ public class InitCommand implements Callable<Integer> {
               host: 127.0.0.1
               port: 8088
 
-            home_dir: ~/.melon
+            home_dir: ~/.melonAI
 
             agents:
               default:

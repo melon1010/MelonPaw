@@ -38,6 +38,10 @@ public class MaterializeSkillTool extends ToolBase {
                       "type": "string",
                       "description": "Name of the skill to materialize (directory name under workspace skills/)"
                     },
+                    "name": {
+                      "type": "string",
+                      "description": "Frontend-compatible alias for skill_name"
+                    },
                     "file_path": {
                       "type": "string",
                       "description": "Optional specific file within the skill directory. Defaults to SKILL.md"
@@ -60,24 +64,26 @@ public class MaterializeSkillTool extends ToolBase {
 
     @Override
     public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        String skillName = (String) param.getInput().get("skill_name");
-        String filePath = (String) param.getInput().getOrDefault("file_path", "SKILL.md");
+        String skillName = textParam(param.getInput(), "skill_name");
+        if (skillName == null || skillName.isBlank()) {
+            skillName = textParam(param.getInput(), "name");
+        }
+        String filePath = textParam(param.getInput(), "file_path");
+        if (filePath == null || filePath.isBlank()) {
+            filePath = "SKILL.md";
+        }
 
         if (skillName == null || skillName.isBlank()) {
             return Mono.just(ToolResultBlock.error("skill_name is required"));
         }
 
         Path skillsDir = workspaceDir.resolve("skills");
-        Path skillDir = skillsDir.resolve(skillName);
-        Path targetFile = skillDir.resolve(filePath);
-
-        // Safety check
         Path resolved = SafePathUtil.resolveSafe(skillsDir, skillName + "/" + filePath);
         if (resolved == null) {
             return Mono.just(ToolResultBlock.error("Path traversal detected in skill path"));
         }
 
-        if (!Files.exists(targetFile)) {
+        if (!Files.exists(resolved)) {
             // List available skills
             if (Files.exists(skillsDir)) {
                 try (Stream<Path> entries = Files.list(skillsDir)) {
@@ -94,11 +100,16 @@ public class MaterializeSkillTool extends ToolBase {
         }
 
         try {
-            String content = Files.readString(targetFile);
+            String content = Files.readString(resolved);
             return Mono.just(ToolResultBlock.text(content));
         } catch (Exception e) {
-            log.error("Failed to read skill file: {}", targetFile, e);
+            log.error("Failed to read skill file: {}", resolved, e);
             return Mono.just(ToolResultBlock.error("Failed to read skill file: " + e.getMessage()));
         }
+    }
+
+    private String textParam(Map<String, Object> input, String key) {
+        Object value = input != null ? input.get(key) : null;
+        return value != null ? String.valueOf(value) : null;
     }
 }

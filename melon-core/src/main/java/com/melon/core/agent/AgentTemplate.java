@@ -46,7 +46,7 @@ public class AgentTemplate {
                     "view_image", "view_video", "send_file_to_user",
                     "get_current_time", "set_user_timezone", "get_token_usage",
                     "list_agents", "chat_with_agent", "submit_to_agent",
-                    "check_agent_task", "spawn_subagent"
+                    "check_agent_task", "spawn_subagent", "materialize_skill"
             ),
             50,
             true,
@@ -63,7 +63,8 @@ public class AgentTemplate {
             List.of(
                     "execute_shell_command", "read_file", "write_file", "edit_file",
                     "grep_search", "glob_search",
-                    "get_current_time", "set_user_timezone", "get_token_usage"
+                    "get_current_time", "set_user_timezone", "get_token_usage",
+                    "materialize_skill"
             ),
             30,
             true,
@@ -81,7 +82,8 @@ public class AgentTemplate {
                     "execute_shell_command", "read_file", "write_file", "edit_file",
                     "grep_search", "glob_search",
                     "get_current_time", "get_token_usage",
-                    "list_agents", "chat_with_agent", "submit_to_agent"
+                    "list_agents", "chat_with_agent", "submit_to_agent",
+                    "materialize_skill"
             ),
             100,
             true,

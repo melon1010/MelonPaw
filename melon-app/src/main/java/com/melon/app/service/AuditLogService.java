@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class AuditLogService {
@@ -27,6 +29,7 @@ public class AuditLogService {
     private static final Logger log = LoggerFactory.getLogger(AuditLogService.class);
 
     private final ConfigManager configManager;
+    private final Set<Path> initializedDbs = ConcurrentHashMap.newKeySet();
 
     public AuditLogService(ConfigManager configManager) {
         this.configManager = configManager;
@@ -105,10 +108,65 @@ public class AuditLogService {
 
     private Connection open(Path db) throws SQLException, IOException {
         Files.createDirectories(db.getParent());
+        Path key = db.toAbsolutePath().normalize();
+        boolean needsInit = !initializedDbs.contains(key) || !Files.exists(db);
+        if (!needsInit) {
+            try {
+                return openChecked(db, false);
+            } catch (SQLException e) {
+                if (!isCorruption(e)) throw e;
+                synchronized (initializedDbs) {
+                    quarantine(db);
+                    initializedDbs.remove(key);
+                    Connection conn = openChecked(db, true);
+                    initializedDbs.add(key);
+                    return conn;
+                }
+            }
+        }
+        synchronized (initializedDbs) {
+            if (initializedDbs.contains(key) && Files.exists(db)) {
+                return openChecked(db, false);
+            }
+            try {
+                Connection conn = openChecked(db, true);
+                initializedDbs.add(key);
+                return conn;
+            } catch (SQLException e) {
+                if (!isCorruption(e)) throw e;
+                quarantine(db);
+                initializedDbs.remove(key);
+                Connection conn = openChecked(db, true);
+                initializedDbs.add(key);
+                return conn;
+            }
+        }
+    }
+
+    private Connection openChecked(Path db, boolean checkAndInit) throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + db);
         try (Statement st = conn.createStatement()) {
             st.execute("PRAGMA journal_mode=WAL");
             st.execute("PRAGMA busy_timeout=5000");
+            if (checkAndInit) {
+                try (ResultSet rs = st.executeQuery("PRAGMA quick_check")) {
+                    if (!rs.next() || !"ok".equalsIgnoreCase(rs.getString(1))) {
+                        throw new SQLException("quick_check failed", "SQLITE_CORRUPT", 11);
+                    }
+                }
+                initSchema(st);
+            }
+            return conn;
+        } catch (SQLException e) {
+            try {
+                conn.close();
+            } catch (SQLException ignored) {
+            }
+            throw e;
+        }
+    }
+
+    private void initSchema(Statement st) throws SQLException {
             st.execute("""
                     CREATE TABLE IF NOT EXISTS audit_events (
                         ts            INTEGER NOT NULL,
@@ -126,14 +184,27 @@ public class AuditLogService {
             st.execute("CREATE INDEX IF NOT EXISTS idx_audit_workspace ON audit_events(workspace_dir)");
             st.execute("CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent_id)");
             st.execute("CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit_events(tool_name)");
-            return conn;
-        } catch (SQLException e) {
+    }
+
+    private void quarantine(Path db) {
+        String suffix = ".corrupt-" + System.currentTimeMillis();
+        for (String ext : List.of("", "-wal", "-shm")) {
+            Path source = Path.of(db + ext);
+            if (!Files.exists(source)) continue;
             try {
-                conn.close();
-            } catch (SQLException ignored) {
+                Files.move(source, Path.of(source + suffix));
+            } catch (IOException ignored) {
             }
-            throw e;
         }
+    }
+
+    private boolean isCorruption(SQLException e) {
+        if (e.getErrorCode() == 11 || e.getErrorCode() == 26) return true;
+        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        return message.contains("quick_check failed")
+                || message.contains("database disk image is malformed")
+                || message.contains("file is not a database")
+                || message.contains("database corruption");
     }
 
     private List<Map<String, Object>> rows(ResultSet rs) throws SQLException {

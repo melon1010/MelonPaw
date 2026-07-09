@@ -1,6 +1,6 @@
 /**
- * Cross-runtime external link opener for browser and legacy pywebview.
- * It validates supported protocols and delegates desktop shells to native openers.
+ * Cross-runtime external link opener for browser and the legacy pywebview shell.
+ * It validates supported protocols before opening.
  */
 import { getPyWebViewApi } from "./pywebview";
 

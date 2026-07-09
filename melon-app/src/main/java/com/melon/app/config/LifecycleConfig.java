@@ -3,6 +3,7 @@ package com.melon.app.config;
 import com.melon.app.cron.CronManager;
 import com.melon.app.runner.AgentRunner;
 import com.melon.app.service.BuiltinSkillInitializer;
+import com.melon.app.service.HistoryStore;
 import com.melon.app.service.TokenUsageService;
 import com.melon.channels.ChannelManager;
 import com.melon.core.agent.MultiAgentManager;
@@ -45,6 +46,7 @@ public class LifecycleConfig implements ApplicationRunner {
     private final CronManager cronManager;
     private final ChannelManager channelManager;
     private final AgentRunner agentRunner;
+    private final HistoryStore historyStore;
 
     public LifecycleConfig(ConfigManager configManager,
                            ProviderManager providerManager,
@@ -55,7 +57,8 @@ public class LifecycleConfig implements ApplicationRunner {
                            PluginManager pluginManager,
                            CronManager cronManager,
                            ChannelManager channelManager,
-                           AgentRunner agentRunner) {
+                           AgentRunner agentRunner,
+                           HistoryStore historyStore) {
         this.configManager = configManager;
         this.providerManager = providerManager;
         this.multiAgentManager = multiAgentManager;
@@ -66,6 +69,7 @@ public class LifecycleConfig implements ApplicationRunner {
         this.cronManager = cronManager;
         this.channelManager = channelManager;
         this.agentRunner = agentRunner;
+        this.historyStore = historyStore;
     }
 
     @Override
@@ -100,6 +104,15 @@ public class LifecycleConfig implements ApplicationRunner {
             var workspaceDir = configManager.resolveWorkspaceDir(agentId);
             workspaceManager.initWorkspace(workspaceDir);
             workspaceManager.writeAgentJson(workspaceDir, agentId, agentConfig);
+            try {
+                int synced = historyStore.syncWorkspaceSessions(agentId);
+                int purged = historyStore.purgeExpired(agentId);
+                if (synced > 0 || purged > 0) {
+                    log.info("History prepared: agent={}, synced_rows={}, purged_rows={}", agentId, synced, purged);
+                }
+            } catch (Exception e) {
+                log.warn("History preparation failed: agent={}", agentId, e);
+            }
         });
     }
 
@@ -128,6 +141,13 @@ public class LifecycleConfig implements ApplicationRunner {
         env.put("root_agent_id", request.fromAgent());
         env.put("channel", "agent_tool");
         env.put("source", "agent_tool");
+        if (request.context() != null) {
+            request.context().forEach((key, value) -> {
+                if (key != null && value != null) {
+                    env.putIfAbsent(key, value);
+                }
+            });
+        }
         long timeout = request.timeoutSeconds() > 0 ? request.timeoutSeconds() : 300;
         var msg = agentRunner.query(
                         request.toAgent(),

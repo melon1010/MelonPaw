@@ -32,18 +32,6 @@
     "yes": "Ya",
     "no": "Tidak"
   },
-  "desktop": {
-    "closeWindow": {
-      "title": "Tutup Jendela",
-      "description": "Apa yang ingin Anda lakukan saat menutup jendela? Keluar dari aplikasi akan menghentikan semua tugas yang sedang berjalan dan tugas terjadwal.",
-      "remember": "Ingat pilihan saya",
-      "showWindow": "Tampilkan Jendela",
-      "minimizeToTray": "Minimalkan ke baki sistem",
-      "quitApp": "Keluar dari Aplikasi",
-      "preference": "Tutup Jendela",
-      "askEveryTime": "Tanya setiap saat"
-    }
-  },
   "chunkError": {
     "title": "Gagal memuat halaman",
     "subTitle": "Ini mungkin disebabkan oleh masalah jaringan atau pembaruan aplikasi.",
@@ -98,34 +86,7 @@
     "newVersion": "Versi baru tersedia: v{{version}}, klik untuk meningkatkan",
     "updateModal": {
       "title": "Versi baru tersedia: v{{version}}",
-      "viewReleases": "Lihat Rilis",
-      "installDesktopUpdate": "Perbarui Sekarang",
-      "desktopInstallHint": "QwenPaw Desktop {{version}} siap dipasang. Aplikasi akan dimulai ulang setelah pembaruan.",
-      "checking": "Memeriksa pembaruan…",
-      "checkingHint": "Memeriksa versi terbaru",
-      "downloading": "Mengunduh pembaruan",
-      "downloadingTo": "Memperbarui ke versi {{version}}",
-      "downloadProgress": "{{done}} / {{total}} · {{rate}}",
-      "installing": "Memasang pembaruan",
-      "willRestart": "Aplikasi akan dimulai ulang otomatis setelah selesai.",
-      "stepPrepare": "Persiapan",
-      "stepDownloading": "Unduh",
-      "stepInstalling": "Pasang",
-      "failedTitle": "Pembaruan gagal",
-      "back": "Kembali",
-      "retry": "Coba Lagi",
-      "errors": {
-        "network": "Tidak dapat menjangkau server pembaruan. Periksa internet dan coba lagi.",
-        "signature": "Tanda tangan file pembaruan tidak valid. Coba unduh lagi.",
-        "appLocation": "QwenPaw berjalan dari lokasi macOS yang hanya-baca. Pindahkan QwenPaw.app ke folder Applications, jalankan dari sana, lalu coba perbarui lagi.",
-        "other": "Pembaruan gagal."
-      },
-      "updateLater": "Unduh di Latar Belakang",
-      "backgroundDownloading": "Mengunduh di latar belakang…",
-      "readyToInstall": "Pembaruan siap",
-      "readyToInstallHint": "Pembaruan v{{version}} telah diunduh. Mulai ulang untuk memasang dan membuka versi baru.",
-      "restartNow": "Perbarui Sekarang",
-      "backgroundFailed": "Unduhan latar belakang gagal"
+      "viewReleases": "Lihat Rilis"
     },
     "settings": {
       "language": "Bahasa",

@@ -421,6 +421,8 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
     private final Map<String, Map<String, Long>> processed = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String>> contextTokens = new ConcurrentHashMap<>();
     private final Map<String, String> tokenFiles = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> typingTasks = new ConcurrentHashMap<>();
+    private final Map<String, TypingTicket> typingTickets = new ConcurrentHashMap<>();
 
     WeChatChannelAdapter() {
         super("wechat", true, true, false, false);
@@ -450,6 +452,10 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
     public CompletableFuture<ChannelHealth> stop(String agentId) {
         ScheduledFuture<?> task = tasks.remove(key(agentId));
         if (task != null) task.cancel(true);
+        typingTasks.forEach((taskKey, typing) -> {
+            if (taskKey.startsWith(agentId + ":") && typing != null) typing.cancel(true);
+        });
+        typingTasks.keySet().removeIf(taskKey -> taskKey.startsWith(agentId + ":"));
         return super.stop(agentId);
     }
 
@@ -524,8 +530,9 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
     @Override
     public CompletableFuture<ChannelOutboundMessage> send(ChannelOutboundMessage message, Map<String, Object> config) {
         return CompletableFuture.supplyAsync(() -> {
+            String toUser = "";
             try {
-                String toUser = ChannelHttpSupport.target(message, "to_user_id", "from_user_id", "user_id");
+                toUser = ChannelHttpSupport.target(message, "to_user_id", "from_user_id", "user_id");
                 Map<?, ?> meta = ChannelHttpSupport.map(message.getMeta().get("channel_meta"));
                 String contextToken = ChannelHttpSupport.first(meta, "context_token", "wechat_context_token");
                 if (contextToken.isBlank() && message.getTo() != null) {
@@ -552,6 +559,7 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
                 boolean sent = ok(response) && accepted(response.body());
                 ChannelHttpSupport.mark(message, sent ? "sent" : "failed", response.statusCode() + " " + response.body());
                 if (!sent) {
+                    if (tokenInvalid(response.body())) clearContextToken(message.getAgentId(), toUser, config);
                     log.warn("WeChat send failed: agent={}, to={}, session={}, detail={}",
                             message.getAgentId(), toUser, message.getSessionId(), response.statusCode() + " " + response.body());
                 } else {
@@ -562,6 +570,8 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
                 ChannelHttpSupport.mark(message, "failed", e.getMessage());
                 log.warn("WeChat send exception: agent={}, user={}, session={}, error={}",
                         message.getAgentId(), message.getUserId(), message.getSessionId(), e.toString());
+            } finally {
+                stopTyping(message.getAgentId(), toUser, message.getSessionId(), config);
             }
             return message;
         });
@@ -605,6 +615,7 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
                     }
                     log.info("WeChat inbound message: agent={}, user={}, session={}, text_len={}",
                             agentId, inbound.getUserId(), inbound.getSessionId(), inbound.getContent().length());
+                    startTyping(agentId, inbound, config);
                     dispatcher.dispatch(inbound, 20);
                 }
             }
@@ -774,14 +785,84 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
     }
 
     private void saveContextTokens(String agentId, Map<String, Object> config, Map<String, String> tokens) {
-        if (tokens == null || tokens.isEmpty()) return;
         try {
             Path path = contextTokensPath(config);
             if (path.getParent() != null) Files.createDirectories(path.getParent());
-            Files.writeString(path, JsonUtils.toJson(tokens), StandardCharsets.UTF_8);
+            Files.writeString(path, JsonUtils.toJson(tokens != null ? tokens : Map.of()), StandardCharsets.UTF_8);
         } catch (Exception e) {
             log.debug("WeChat failed to save context tokens for agent {}: {}", agentId, e.toString());
         }
+    }
+
+    private void startTyping(String agentId, ChannelInboundMessage inbound, Map<String, Object> config) {
+        String userId = stringValue(inbound.getUserId());
+        String contextToken = ChannelHttpSupport.first(inbound.getChannelMeta(), "wechat_context_token", "context_token");
+        if (userId.isBlank() || contextToken.isBlank()) return;
+        String taskKey = typingKey(agentId, userId, inbound.getSessionId());
+        if (typingTasks.containsKey(taskKey)) return;
+        String ticket = typingTicket(agentId, userId, contextToken, config);
+        if (ticket.isBlank()) return;
+        sendTyping(agentId, userId, ticket, 1, config);
+        ScheduledFuture<?> task = executor.scheduleWithFixedDelay(
+                () -> sendTyping(agentId, userId, ticket, 1, config), 5, 5, TimeUnit.SECONDS);
+        typingTasks.put(taskKey, task);
+    }
+
+    private void stopTyping(String agentId, String userId, String sessionId, Map<String, Object> config) {
+        if (userId == null || userId.isBlank()) return;
+        ScheduledFuture<?> task = typingTasks.remove(typingKey(agentId, userId, sessionId));
+        if (task != null) task.cancel(false);
+        TypingTicket ticket = typingTickets.get(agentId + ":" + userId);
+        if (ticket != null && !ticket.expired()) sendTyping(agentId, userId, ticket.value(), 2, config);
+    }
+
+    private String typingTicket(String agentId, String userId, String contextToken, Map<String, Object> config) {
+        String key = agentId + ":" + userId;
+        TypingTicket cached = typingTickets.get(key);
+        if (cached != null && !cached.expired()) return cached.value();
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("ilink_user_id", userId);
+            body.put("context_token", contextToken);
+            body.put("base_info", Map.of("channel_version", VERSION));
+            HttpResponse<String> response = ChannelHttpSupport.post(base(config) + "/ilink/bot/getconfig", headers(config), body);
+            Map<String, Object> parsed = ChannelHttpSupport.json(response.body());
+            if (ok(response) && intValue(parsed.get("ret")) == 0 && intValue(parsed.get("errcode")) == 0) {
+                String ticket = stringValue(parsed.get("typing_ticket"));
+                if (!ticket.isBlank()) {
+                    typingTickets.put(key, new TypingTicket(ticket, System.currentTimeMillis() + Duration.ofHours(24).toMillis()));
+                    return ticket;
+                }
+            }
+            log.debug("WeChat getconfig returned no typing ticket: agent={}, user={}, detail={}", agentId, userId, response.body());
+        } catch (Exception e) {
+            log.debug("WeChat getconfig failed: agent={}, user={}, error={}", agentId, userId, e.toString());
+        }
+        return "";
+    }
+
+    private void sendTyping(String agentId, String userId, String ticket, int status, Map<String, Object> config) {
+        try {
+            ChannelHttpSupport.post(base(config) + "/ilink/bot/sendtyping", headers(config), Map.of(
+                    "ilink_user_id", userId,
+                    "typing_ticket", ticket,
+                    "status", status,
+                    "base_info", Map.of("channel_version", VERSION)));
+        } catch (Exception e) {
+            log.debug("WeChat sendtyping failed: agent={}, user={}, status={}, error={}", agentId, userId, status, e.toString());
+        }
+    }
+
+    private String typingKey(String agentId, String userId, String sessionId) {
+        return agentId + ":" + userId + ":" + stringValue(sessionId);
+    }
+
+    private void clearContextToken(String agentId, String userId, Map<String, Object> config) {
+        if (userId == null || userId.isBlank()) return;
+        Map<String, String> tokens = contextTokens.get(key(agentId));
+        if (tokens == null) return;
+        tokens.remove(userId);
+        saveContextTokens(agentId, Map.of("bot_token_file", tokenFiles.getOrDefault(key(agentId), tokenFilePath(config))), tokens);
     }
 
     private Path contextTokensPath(Map<String, Object> config) {
@@ -812,6 +893,19 @@ class WeChatChannelAdapter extends BasicChannelAdapter {
         Map<String, Object> parsed = ChannelHttpSupport.json(body);
         if (parsed.isEmpty()) return true;
         return intValue(parsed.get("ret")) == 0 && intValue(parsed.get("errcode")) == 0;
+    }
+
+    private boolean tokenInvalid(String body) {
+        Map<String, Object> parsed = ChannelHttpSupport.json(body);
+        int ret = intValue(parsed.get("ret"));
+        int errcode = intValue(parsed.get("errcode"));
+        return ret == -2 || errcode == -14 || stringValue(parsed.get("errmsg")).toLowerCase().contains("session timeout");
+    }
+
+    private record TypingTicket(String value, long expiresAtMillis) {
+        boolean expired() {
+            return value == null || value.isBlank() || System.currentTimeMillis() >= expiresAtMillis;
+        }
     }
 
     private boolean looksLikeFileName(String text) {
