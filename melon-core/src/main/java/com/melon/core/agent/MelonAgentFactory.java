@@ -141,7 +141,10 @@ public class MelonAgentFactory {
             builder.fallbackModel(agentConfig.getRunning().getFallbackModel());
         }
 
-        return builder.build();
+        HarnessAgent agent = builder.build();
+        registerIfEnabled(agent.getToolkit(), agentConfig, "memory_search",
+                "com.melon.tools.memory.Bm25MemorySearchTool", agent.getWorkspaceManager());
+        return agent;
     }
 
     private Toolkit buildToolkit(String agentId, AgentConfig config, Path workspaceDir) {
@@ -269,8 +272,7 @@ public class MelonAgentFactory {
             }
         }));
 
-        // HarnessAgent 会注册官方 file-backed memory_search/memory_get/session_search 工具。
-        // Java 侧尚未接入 Python 的 ReMeLight/ADBPG 语义记忆后端，所以这里不再注入自定义假 memory_search。
+        // HarnessAgent 先注册官方 memory_get/session_search；build 后再用 Java BM25 覆盖 memory_search。
 
         return list;
     }

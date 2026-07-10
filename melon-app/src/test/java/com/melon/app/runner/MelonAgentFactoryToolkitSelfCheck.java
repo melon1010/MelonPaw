@@ -2,12 +2,21 @@ package com.melon.app.runner;
 
 import com.melon.core.agent.MelonAgentFactory;
 import com.melon.core.config.AgentConfig;
+import com.melon.core.provider.ProviderManager;
 import com.melon.tools.shell.ExecuteShellCommandTool;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.model.ChatResponse;
+import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.model.Model;
+import io.agentscope.core.model.ToolSchema;
 import io.agentscope.core.permission.PermissionBehavior;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionDecision;
 import io.agentscope.core.permission.PermissionEngine;
+import io.agentscope.core.state.InMemoryAgentStateStore;
 import io.agentscope.core.tool.Toolkit;
+import io.agentscope.harness.agent.HarnessAgent;
+import reactor.core.publisher.Flux;
 
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -95,6 +104,24 @@ public final class MelonAgentFactoryToolkitSelfCheck {
         PermissionContextState smartPerms = (PermissionContextState) buildPermissionContext.invoke(factory, smart);
         assertAsk(smartPerms, "write_file");
         assertAsk(smartPerms, "agent_spawn");
+
+        AgentConfig runtimeConfig = new AgentConfig();
+        runtimeConfig.setActiveModel("fake:test");
+        Path runtimeWorkspace = Files.createTempDirectory("melon-agent-runtime-check");
+        Files.writeString(runtimeWorkspace.resolve("MEMORY.md"), "ReMeLight uses BM25 keyword recall.\n");
+        MelonAgentFactory runtimeFactory = new MelonAgentFactory(null, null, List.of(), new FakeProviderManager());
+        try (HarnessAgent agent = runtimeFactory.create("default", runtimeConfig, runtimeWorkspace, new InMemoryAgentStateStore())) {
+            ToolSchema memorySearch = agent.getToolkit().getToolSchemas().stream()
+                    .filter(schema -> "memory_search".equals(schema.getName()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("memory_search schema missing"));
+            Object properties = memorySearch.getParameters().get("properties");
+            if (!(properties instanceof Map<?, ?> props)
+                    || !props.containsKey("max_results")
+                    || !props.containsKey("min_score")) {
+                throw new AssertionError("memory_search was not replaced with BM25 schema: " + memorySearch.getParameters());
+            }
+        }
     }
 
     private static void assertPresent(Toolkit toolkit, String name) {
@@ -137,6 +164,25 @@ public final class MelonAgentFactoryToolkitSelfCheck {
         PermissionBehavior actual = decision != null ? decision.getBehavior() : null;
         if (actual != expected) {
             throw new AssertionError("expected " + expected + " for shell command `" + command + "`, got " + actual);
+        }
+    }
+
+    private static final class FakeProviderManager extends ProviderManager {
+        @Override
+        public Model createModel(String modelId) {
+            return new FakeModel();
+        }
+    }
+
+    private static final class FakeModel implements Model {
+        @Override
+        public Flux<ChatResponse> stream(List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+            return Flux.empty();
+        }
+
+        @Override
+        public String getModelName() {
+            return "fake:test";
         }
     }
 }

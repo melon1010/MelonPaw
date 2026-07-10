@@ -112,7 +112,7 @@ public class SystemPromptMiddleware implements MiddlewareBase {
         return """
             <!-- memory:start -->
             You have access to a persistent memory system.
-            `memory_search` performs keyword search over MEMORY.md and memory/*.md; use short,
+            `memory_search` performs BM25 keyword ranking over MEMORY.md and memory/*.md; use short,
             specific keywords, identifiers, file names, dates, people, or error codes instead of
             broad natural-language questions.
             Use `memory_get` after `memory_search` to read surrounding lines from specific memory files.
