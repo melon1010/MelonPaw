@@ -17,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import com.melon.tools.shell.ExecuteShellCommandTool;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -245,7 +246,7 @@ public class FrontendCompatController {
 
     @GetMapping("/config/security/tool-guard/builtin-rules")
     public Mono<ResponseEntity<?>> builtinToolGuardRules() {
-        return Mono.just(ResponseEntity.ok(List.of()));
+        return Mono.just(ResponseEntity.ok(ExecuteShellCommandTool.builtinRulePayloads()));
     }
 
     @GetMapping("/config/security/audit-events")

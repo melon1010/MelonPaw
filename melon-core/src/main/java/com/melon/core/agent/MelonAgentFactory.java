@@ -149,7 +149,8 @@ public class MelonAgentFactory {
         registerIfEnabled(toolkit, config, "execute_shell_command", "com.melon.tools.shell.ExecuteShellCommandTool",
                 workspaceDir.toString(),
                 config.getRunning().getShellCommandTimeout(),
-                config.getRunning().getShellCommandExecutable());
+                config.getRunning().getShellCommandExecutable(),
+                toolGuardConfig(config));
         registerIfEnabled(toolkit, config, "read_file", "com.melon.tools.fileio.ReadFileTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "write_file", "com.melon.tools.fileio.WriteFileTool", workspaceDir.toString());
         registerIfEnabled(toolkit, config, "edit_file", "com.melon.tools.fileio.EditFileTool", workspaceDir.toString());
@@ -226,6 +227,15 @@ public class MelonAgentFactory {
         return tool == null || tool.isEnabled();
     }
 
+    private Map<String, Object> toolGuardConfig(AgentConfig config) {
+        if (config == null || config.getFrontendRunningConfig() == null) return Map.of();
+        Object guard = config.getFrontendRunningConfig().get("tool_guard_config");
+        if (!(guard instanceof Map<?, ?> guardMap)) return Map.of();
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        guardMap.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
+    }
+
     /**
      * 构建中间件链. 对应 Python 的 Mixin 继承链 + LightContextManager hooks.
      */
@@ -295,6 +305,8 @@ public class MelonAgentFactory {
         boolean smart = "SMART".equalsIgnoreCase(level);
         PermissionContextState.Builder builder = PermissionContextState.builder()
                 .mode(strict ? PermissionMode.DEFAULT : PermissionMode.BYPASS);
+        builder.addDenyRule("execute_shell_command", new PermissionRule("execute_shell_command",
+                "qwenpaw-auto-deny-shell", PermissionBehavior.DENY, "melonpaw-java"));
         if (strict) {
             for (String tool : strictApprovalTools()) {
                 builder.addAskRule(tool, new PermissionRule(tool, null, PermissionBehavior.ASK, "melonpaw-java"));
