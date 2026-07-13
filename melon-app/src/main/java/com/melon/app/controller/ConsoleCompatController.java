@@ -3,23 +3,31 @@ package com.melon.app.controller;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.melon.app.runner.AgentRunner;
+import com.melon.app.runner.AgentSessionLogReader;
 import com.melon.app.runner.ChatManager;
 import com.melon.app.runner.ChatSpec;
-import com.melon.app.runner.CommandDispatcher;
 import com.melon.app.runner.MelonPawEnvelopeMapper;
 import com.melon.app.service.ApprovalService;
 import com.melon.app.service.InboxStore;
 import com.melon.app.service.SkillService;
 import com.melon.core.config.ConfigManager;
-import com.melon.core.agent.CommandHandler;
 import com.melon.core.agent.MultiAgentManager;
+import com.melon.core.provider.ProviderManager;
+import com.melon.core.util.JsonUtils;
 import com.melon.core.util.SafePathUtil;
 import com.melon.tools.agent.AgentChatBridge;
 import com.melon.tools.agent.SubmitToAgentTool;
 import com.melon.tools.shell.ExecuteShellCommandTool;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.UserMessage;
+import io.agentscope.core.message.MsgRole;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.state.AgentState;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.memory.MemoryConsolidator;
+import io.agentscope.harness.agent.memory.MemoryFlushManager;
+import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.agentscope.harness.agent.memory.compaction.ConversationCompactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -31,16 +39,20 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.io.RandomAccessFile;
+import java.io.BufferedWriter;
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.Optional;
 
 import static com.melon.core.util.ValueUtils.stringValue;
 import java.util.UUID;
@@ -59,23 +71,25 @@ public class ConsoleCompatController {
     private final ChatManager chatManager;
     private final ApprovalService approvalService;
     private final ConfigManager configManager;
-    private final CommandDispatcher commandDispatcher;
     private final SkillService skillService;
     private final MultiAgentManager multiAgentManager;
     private final InboxStore inboxStore;
+    private final ProviderManager providerManager;
+    private final AgentSessionLogReader sessionLogReader;
 
     public ConsoleCompatController(AgentRunner agentRunner, ChatManager chatManager, ApprovalService approvalService,
-                                   ConfigManager configManager, CommandDispatcher commandDispatcher,
-                                   SkillService skillService, MultiAgentManager multiAgentManager,
-                                   InboxStore inboxStore) {
+                                   ConfigManager configManager, SkillService skillService, MultiAgentManager multiAgentManager,
+                                   InboxStore inboxStore, ProviderManager providerManager,
+                                   AgentSessionLogReader sessionLogReader) {
         this.agentRunner = agentRunner;
         this.chatManager = chatManager;
         this.approvalService = approvalService;
         this.configManager = configManager;
-        this.commandDispatcher = commandDispatcher;
         this.skillService = skillService;
         this.multiAgentManager = multiAgentManager;
         this.inboxStore = inboxStore;
+        this.providerManager = providerManager;
+        this.sessionLogReader = sessionLogReader;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -92,13 +106,21 @@ public class ConsoleCompatController {
         String chatId = chat.getId();
         chatManager.setStatus(agentId, chatId, "running");
 
-        String commandReply = handleCommand(agentId, text);
+        CommandOutcome command = handleCommand(agentId, userId, sessionId, channel, text);
+        String commandReply = command.reply();
         if (commandReply != null) {
             MelonPawEnvelopeMapper envelope = new MelonPawEnvelopeMapper(sessionId);
-            saveCommandShadow(agentId, channel, userId, sessionId, frontendContext, commandReply);
+            if (command.stateChanged()) {
+                chatManager.saveSessionShadowFromStateStore(agentId, channel, userId, sessionId, List.of());
+            } else {
+                saveCommandShadow(agentId, channel, userId, sessionId, frontendContext, commandReply);
+            }
             chatManager.setStatus(agentId, chatId, "idle");
             return Flux.fromIterable(envelope.completeWithText(commandReply))
                     .doFinally(signal -> log.info("Console command handled: agent={}, session={}, chat={}, signal={}", agentId, sessionId, chatId, signal));
+        }
+        if (command.modelText() != null) {
+            text = command.modelText();
         }
 
         Map<String, Object> env = new LinkedHashMap<>();
@@ -569,31 +591,209 @@ public class ConsoleCompatController {
         return String.join("\n", parts).trim();
     }
 
-    private String handleCommand(String agentId, String text) {
-        if (text == null || !text.trim().startsWith("/")) return null;
-        String token = text.trim().split("\\s+", 2)[0].toLowerCase();
-        if (!List.of("/clear", "/compact", "/new", "/model", "/skills", "/help", "/mission").contains(token)) {
-            return null;
+    private CommandOutcome handleCommand(String agentId, String userId, String sessionId, String channel, String text) {
+        if (text == null || !text.trim().startsWith("/")) return CommandOutcome.pass();
+        String raw = text.trim();
+        String body = raw.substring(1);
+        int space = body.indexOf(' ');
+        String token = (space >= 0 ? body.substring(0, space) : body).toLowerCase(Locale.ROOT);
+        String args = space >= 0 ? body.substring(space + 1).trim() : "";
+        if (token.startsWith("[") && token.endsWith("]")) {
+            return dispatchSkill(agentId, channel, token.substring(1, token.length() - 1), args);
         }
-        if ("/mission".equals(token)) {
-            return readWorkspaceMarkdown(agentId, "SOUL.md", "No mission file is configured.");
-        }
-        CommandHandler.CommandResult result = commandDispatcher.dispatch(text);
-        if (result == null || result.getType() == CommandHandler.CommandType.UNKNOWN) return null;
-        if (!result.isSuccess()) return result.getMessage();
-        return switch (result.getAction()) {
-            case SWITCH_MODEL -> switchModel(agentId, stringValue(result.getData().get("model"), ""));
-            case LIST_SKILLS -> listSkills(agentId);
-            case CLEAR_HISTORY -> "Conversation history is cleared for this turn. Start a new chat if you need a clean persisted session.";
-            case COMPACT_CONTEXT -> "Context compaction has been requested. AgentScope will compact automatically when configured thresholds are reached.";
-            case NEW_SESSION -> "New session requested. Use the new chat button to create a separate persisted session.";
-            case SHOW_HELP -> result.getMessage();
-            default -> result.getMessage();
+        return switch (token) {
+            case "help" -> CommandOutcome.reply(commandHelp());
+            case "mission" -> CommandOutcome.reply(readWorkspaceMarkdown(agentId, "SOUL.md", "No mission file is configured."));
+            case "skills" -> CommandOutcome.reply(listSkills(agentId, channel));
+            case "clear" -> clearConversation(agentId, userId, sessionId, channel);
+            case "new" -> newConversation(agentId, userId, sessionId, channel);
+            case "stop" -> CommandOutcome.reply(stopConversation(agentId, userId, sessionId, args));
+            case "approval" -> CommandOutcome.reply(handleApproval(agentId, sessionId, args));
+            case "approve" -> CommandOutcome.reply(decideApproval(agentId, sessionId, args, true));
+            case "deny" -> CommandOutcome.reply(decideApproval(agentId, sessionId, args, false));
+            case "model" -> CommandOutcome.reply(handleModel(agentId, args));
+            case "status" -> CommandOutcome.reply(status(agentId));
+            case "restart" -> CommandOutcome.reply(restart(agentId));
+            case "reload-config", "reload_config" -> CommandOutcome.reply(reloadConfig(agentId));
+            case "version" -> CommandOutcome.reply("melonPaw Java 1.0.0");
+            case "logs" -> CommandOutcome.reply("Runtime logs are available from the Java server process.");
+            case "daemon" -> dispatchDaemon(agentId, args);
+            case "history" -> CommandOutcome.reply(history(agentId, userId, channel, sessionId));
+            case "message" -> CommandOutcome.reply(message(agentId, userId, channel, sessionId, args));
+            case "system_prompt" -> CommandOutcome.reply(systemPrompt(agentId));
+            case "compact" -> compact(agentId, userId, sessionId);
+            case "compact_str" -> CommandOutcome.reply(compactSummary(agentId, userId, sessionId));
+            case "summarize_status" -> CommandOutcome.reply(
+                    "AgentScope Java memory maintenance has no background summary-task queue.");
+            case "dream" -> CommandOutcome.reply(dream(agentId, userId, sessionId));
+            case "memorize" -> CommandOutcome.reply(memorize(agentId, userId, sessionId, args));
+            case "proactive" -> CommandOutcome.reply(
+                    "Proactive background messages are not configured in the Java runtime.");
+            case "plan" -> args.isBlank()
+                    ? CommandOutcome.reply("Plan mode status is available through the agent plan tools.")
+                    : CommandOutcome.pass();
+            case "dump_history" -> CommandOutcome.reply(dumpHistory(agentId, userId, sessionId));
+            case "load_history" -> loadHistory(agentId, userId, sessionId);
+            default -> dispatchSkill(agentId, channel, token, args);
         };
     }
 
+    private CommandOutcome dispatchDaemon(String agentId, String args) {
+        if (args.isBlank()) return CommandOutcome.reply("Usage: /daemon <status|restart|reload-config|version|logs>");
+        String[] parts = args.split("\\s+", 2);
+        String name = parts[0].toLowerCase(Locale.ROOT);
+        return switch (name) {
+            case "status" -> CommandOutcome.reply(status(agentId));
+            case "restart" -> CommandOutcome.reply(restart(agentId));
+            case "reload-config", "reload_config" -> CommandOutcome.reply(reloadConfig(agentId));
+            case "version" -> CommandOutcome.reply("melonPaw Java 1.0.0");
+            case "logs" -> CommandOutcome.reply("Runtime logs are available from the Java server process.");
+            default -> CommandOutcome.reply("Unknown daemon command: " + name);
+        };
+    }
+
+    private CommandOutcome dispatchSkill(String agentId, String channel, String skillName, String input) {
+        Map<String, Object> skill = skillService.listSkills(agentId).stream()
+                .filter(candidate -> skillName.equalsIgnoreCase(stringValue(candidate.get("name"), "")))
+                .filter(candidate -> Boolean.TRUE.equals(candidate.get("enabled")))
+                .filter(candidate -> skillAvailableOnChannel(candidate, channel))
+                .findFirst().orElse(null);
+        if (skill == null) return CommandOutcome.pass();
+        String name = stringValue(skill.get("name"), skillName);
+        String description = stringValue(skill.get("description"), "No description.");
+        if (input.isBlank()) {
+            return CommandOutcome.reply("**" + name + "**\n\n- **command**: `/" + name
+                    + " <input>` to invoke\n- **description**: " + description);
+        }
+        String content = skillBody(stringValue(skill.get("content"), ""));
+        return CommandOutcome.rewrite("Use the [" + name + "] skill to fulfill user's task: " + input + "\n\n" + content);
+    }
+
+    private boolean skillAvailableOnChannel(Map<String, Object> skill, String channel) {
+        Object raw = skill.get("channels");
+        if (!(raw instanceof List<?> channels) || channels.isEmpty()) return true;
+        return channels.stream().map(String::valueOf)
+                .anyMatch(value -> "all".equalsIgnoreCase(value) || value.equalsIgnoreCase(channel));
+    }
+
+    private String skillBody(String content) {
+        if (!content.startsWith("---")) return content;
+        int end = content.indexOf("\n---", 3);
+        return end >= 0 ? content.substring(end + 4).strip() : content;
+    }
+
+    private CommandOutcome clearConversation(String agentId, String userId, String sessionId, String channel) {
+        try {
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            agent.getDelegate().interrupt(userId, sessionId);
+            clearAgentState(agent, userId, sessionId);
+            chatManager.clearSessionShadow(agentId, channel, userId, sessionId);
+            approvalService.cancelPendingApproval(sessionId);
+            approvalService.cancelPendingPlan(sessionId);
+            return CommandOutcome.stateChanged("History cleared.");
+        } catch (Exception e) {
+            log.warn("Failed to clear conversation: agent={}, session={}", agentId, sessionId, e);
+            return CommandOutcome.reply("Failed to clear conversation: " + e.getMessage());
+        }
+    }
+
+    private CommandOutcome newConversation(String agentId, String userId, String sessionId, String channel) {
+        try {
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            agent.getDelegate().interrupt(userId, sessionId);
+            AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+            if (!state.getContext().isEmpty()) {
+                RuntimeContext context = RuntimeContext.builder()
+                        .userId(userId).sessionId(sessionId).agentState(state).build();
+                new MemoryFlushManager(agent.workspaceFor(userId, sessionId), agent.getModel())
+                        .flushMemories(context, state.getContext()).block();
+            }
+            clearAgentState(agent, userId, sessionId);
+            chatManager.clearSessionShadow(agentId, channel, userId, sessionId);
+            approvalService.cancelPendingApproval(sessionId);
+            approvalService.cancelPendingPlan(sessionId);
+            return CommandOutcome.stateChanged("New conversation started; prior context was written to memory.");
+        } catch (Exception e) {
+            log.warn("Failed to start new conversation: agent={}, session={}", agentId, sessionId, e);
+            return CommandOutcome.reply("Failed to start new conversation: " + e.getMessage());
+        }
+    }
+
+    private void clearAgentState(HarnessAgent agent, String userId, String sessionId) {
+        AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+        state.contextMutable().clear();
+        state.setSummary("");
+        state.getTasksContext().tasksMutable().clear();
+        state.getPlanModeContext().setPlanActive(false);
+        state.getPlanModeContext().setCurrentPlanFile(null);
+        agent.getDelegate().saveAgentState(userId, sessionId);
+    }
+
+    private String stopConversation(String agentId, String userId, String sessionId, String args) {
+        HarnessAgent agent = multiAgentManager.getAgent(agentId);
+        if (agent == null) return "No active task found for this session.";
+        String targetSessionId = sessionId;
+        if (args != null && args.startsWith("session=")) {
+            String candidate = args.substring("session=".length()).trim();
+            if (!candidate.isBlank()) targetSessionId = candidate;
+        }
+        agent.getDelegate().interrupt(userId, targetSessionId);
+        boolean approvalCancelled = approvalService.cancelPendingApproval(targetSessionId);
+        return approvalCancelled ? "Task stopped and pending approval denied." : "Task stop requested.";
+    }
+
+    private String handleApproval(String agentId, String sessionId, String args) {
+        if (args.startsWith("list")) {
+            List<Map<String, Object>> pending = approvalService.getPendingApprovals();
+            return pending.isEmpty() ? "No pending approval." : "Pending approvals:\n" + JsonUtils.toJson(pending);
+        }
+        if (args.startsWith("cancel")) {
+            String requestId = args.substring("cancel".length()).trim();
+            if (requestId.isBlank()) return "Usage: /approval cancel <request_id>";
+            return decideApproval(agentId, sessionId, requestId, false).replace("Denied.", "Cancelled.");
+        }
+        if (args.startsWith("approve")) return decideApproval(agentId, sessionId, args.substring("approve".length()).trim(), true);
+        if (args.startsWith("deny")) return decideApproval(agentId, sessionId, args.substring("deny".length()).trim(), false);
+        Map<String, Object> pending = approvalService.getPendingApproval(sessionId);
+        return pending == null ? "No pending approval." : "Pending approval:\n" + JsonUtils.toJson(pending);
+    }
+
+    private String decideApproval(String agentId, String sessionId, String args, boolean approved) {
+        String requestId = args.isBlank() ? "" : args.split("\\s+", 2)[0];
+        boolean accepted = approvalService.decidePendingApproval(sessionId, requestId, approved, agentId);
+        return accepted ? (approved ? "Approved." : "Denied.") : "Approval not found.";
+    }
+
+    private String handleModel(String agentId, String args) {
+        var agent = configManager.getConfig().getAgent(agentId);
+        if (agent == null) return "Agent not found: " + agentId;
+        if (args.isBlank()) return "Active model: " + stringValue(agent.getActiveModel(), "not configured");
+        if ("list".equalsIgnoreCase(args)) {
+            return providerManager.listProviders().stream().flatMap(provider -> providerManager.listModels(provider).stream()
+                    .map(model -> provider + ":" + model)).sorted().collect(java.util.stream.Collectors.joining("\n"));
+        }
+        if ("reset".equalsIgnoreCase(args)) {
+            Map<String, String> active = providerManager.getActiveModel();
+            String provider = active.get("provider_id");
+            String model = active.get("model");
+            if (provider == null || model == null) return "No global default model is configured.";
+            return switchModel(agentId, provider + ":" + model);
+        }
+        if (args.startsWith("info ")) {
+            String model = args.substring("info ".length()).trim();
+            return "Model: " + model + "\nActive: " + model.equals(agent.getActiveModel());
+        }
+        return switchModel(agentId, args);
+    }
+
     private String switchModel(String agentId, String model) {
-        if (model == null || model.isBlank()) return "Usage: /model <provider:model>";
+        int separator = model.indexOf(':');
+        if (separator <= 0 || separator == model.length() - 1) return "Usage: /model <provider:model>";
+        String provider = model.substring(0, separator);
+        String name = model.substring(separator + 1);
+        if (!providerManager.listProviders().contains(provider) || !providerManager.listModels(provider).contains(name)) {
+            return "Model not found: " + model;
+        }
         var agent = configManager.getConfig().getAgent(agentId);
         if (agent == null) return "Agent not found: " + agentId;
         agent.setActiveModel(model);
@@ -602,14 +802,239 @@ public class ConsoleCompatController {
         return "Active model switched to " + model;
     }
 
-    private String listSkills(String agentId) {
+    private String status(String agentId) {
+        var agent = configManager.getConfig().getAgent(agentId);
+        if (agent == null) return "Agent not found: " + agentId;
+        return "Agent: " + agentId + "\nRunning: " + multiAgentManager.isRunning(agentId)
+                + "\nModel: " + stringValue(agent.getActiveModel(), "not configured");
+    }
+
+    private String restart(String agentId) {
+        multiAgentManager.reload(agentId);
+        return "Agent restart requested.";
+    }
+
+    private String reloadConfig(String agentId) {
+        configManager.reload();
+        multiAgentManager.reload(agentId);
+        return "Configuration reloaded.";
+    }
+
+    private CommandOutcome compact(String agentId, String userId, String sessionId) {
+        var config = configManager.getConfig().getAgent(agentId);
+        if (config == null) return CommandOutcome.reply("Agent not found: " + agentId);
+        if (!config.getContextCompact().isEnabled()) {
+            return CommandOutcome.reply("Context compaction is disabled in the agent configuration.");
+        }
+        try {
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+            List<Msg> before = state.getContext();
+            if (before.isEmpty()) return CommandOutcome.reply("No messages to compact.");
+
+            RuntimeContext context = RuntimeContext.builder()
+                    .userId(userId).sessionId(sessionId).agentState(state).build();
+            MemoryFlushManager flush = new MemoryFlushManager(agent.workspaceFor(userId, sessionId), agent.getModel());
+            ConversationCompactor compactor = new ConversationCompactor(agent.getModel(), flush);
+            Optional<List<Msg>> compacted = compactor.compactIfNeeded(context, before,
+                    forcedCompactionConfig(config.getContextCompact(), agent), agentId, sessionId).block();
+            if (compacted == null || compacted.isEmpty()) {
+                return CommandOutcome.reply("Nothing to compact; the current context already fits the retained tail.");
+            }
+            state.contextMutable().clear();
+            state.contextMutable().addAll(compacted.get());
+            agent.getDelegate().saveAgentState(userId, sessionId);
+            int removed = Math.max(0, before.size() - compacted.get().size());
+            return CommandOutcome.stateChanged("Context compacted: " + removed + " message(s) replaced by a summary.");
+        } catch (Exception e) {
+            log.warn("Manual compaction failed: agent={}, session={}", agentId, sessionId, e);
+            return CommandOutcome.reply("Context compaction failed: " + e.getMessage());
+        }
+    }
+
+    private CompactionConfig forcedCompactionConfig(com.melon.core.config.ContextCompactConfig config,
+                                                    HarnessAgent agent) {
+        int maxInputTokens = 128 * 1024;
+        int keepTokens = (int) Math.max(1, Math.round(maxInputTokens * config.getReserveThresholdRatio()));
+        return CompactionConfig.builder()
+                .triggerMessages(1)
+                .triggerTokens(1)
+                .keepMessages(config.getKeepMessages())
+                .keepTokens(keepTokens)
+                .flushBeforeCompact(true)
+                .offloadBeforeCompact(true)
+                .model(agent.getModel())
+                .build();
+    }
+
+    private String compactSummary(String agentId, String userId, String sessionId) {
+        try {
+            AgentState state = multiAgentManager.getOrCreate(agentId).getDelegate().getAgentState(userId, sessionId);
+            return state.getContext().stream()
+                    .filter(message -> ConversationCompactor.SUMMARY_MSG_NAME.equals(message.getName()))
+                    .findFirst()
+                    .map(this::messageText)
+                    .filter(text -> !text.isBlank())
+                    .orElse("No compressed summary is available.");
+        } catch (Exception e) {
+            return "Unable to read compressed summary: " + e.getMessage();
+        }
+    }
+
+    private String dream(String agentId, String userId, String sessionId) {
+        try {
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            RuntimeContext context = RuntimeContext.builder().userId(userId).sessionId(sessionId).build();
+            new MemoryConsolidator(agent.workspaceFor(userId, sessionId), agent.getModel()).consolidate(context).block();
+            return "Memory consolidation completed.";
+        } catch (Exception e) {
+            log.warn("Memory consolidation failed: agent={}, session={}", agentId, sessionId, e);
+            return "Memory consolidation failed: " + e.getMessage();
+        }
+    }
+
+    private String memorize(String agentId, String userId, String sessionId, String args) {
+        final int count;
+        try {
+            count = Integer.parseInt(args.isBlank() ? "1" : args);
+        } catch (NumberFormatException e) {
+            return "Usage: /memorize [positive reply count]";
+        }
+        if (count <= 0) return "Usage: /memorize [positive reply count]";
+        try {
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+            List<Msg> context = state.getContext();
+            int last = -1;
+            int first = -1;
+            int found = 0;
+            for (int index = context.size() - 1; index >= 0; index--) {
+                if (context.get(index).getRole() != MsgRole.ASSISTANT) continue;
+                if (last < 0) last = index;
+                first = index;
+                if (++found == count) break;
+            }
+            if (last < 0) return "No assistant replies are available to memorize.";
+            for (int index = first - 1; index >= 0; index--) {
+                if (context.get(index).getRole() == MsgRole.ASSISTANT) {
+                    first = index + 1;
+                    break;
+                }
+            }
+            RuntimeContext runtime = RuntimeContext.builder().userId(userId).sessionId(sessionId).agentState(state).build();
+            new MemoryFlushManager(agent.workspaceFor(userId, sessionId), agent.getModel())
+                    .flushMemories(runtime, context.subList(first, last + 1)).block();
+            return "Memory extraction completed for " + found + " assistant reply group(s).";
+        } catch (Exception e) {
+            log.warn("Manual memory extraction failed: agent={}, session={}", agentId, sessionId, e);
+            return "Memory extraction failed: " + e.getMessage();
+        }
+    }
+
+    private String dumpHistory(String agentId, String userId, String sessionId) {
+        try {
+            AgentState state = multiAgentManager.getOrCreate(agentId).getDelegate().getAgentState(userId, sessionId);
+            Path file = SafePathUtil.resolveSafe(configManager.resolveWorkspaceDir(agentId), "debug_history.jsonl");
+            Files.createDirectories(file.getParent());
+            try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                for (Msg message : state.getContext()) {
+                    writer.write(JSON.writeValueAsString(message));
+                    writer.newLine();
+                }
+            }
+            return "History dumped: " + state.getContext().size() + " message(s) to " + file + ".";
+        } catch (Exception e) {
+            log.warn("History dump failed: agent={}, session={}", agentId, sessionId, e);
+            return "History dump failed: " + e.getMessage();
+        }
+    }
+
+    private CommandOutcome loadHistory(String agentId, String userId, String sessionId) {
+        Path file = SafePathUtil.resolveSafe(configManager.resolveWorkspaceDir(agentId), "debug_history.jsonl");
+        if (!Files.isRegularFile(file)) return CommandOutcome.reply("History file not found: " + file + ". Use /dump_history first.");
+        try {
+            List<Msg> loaded = new ArrayList<>();
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                if (line.isBlank()) continue;
+                if (loaded.size() >= 10_000) break;
+                loaded.add(JSON.readValue(line, Msg.class));
+            }
+            HarnessAgent agent = multiAgentManager.getOrCreate(agentId);
+            AgentState state = agent.getDelegate().getAgentState(userId, sessionId);
+            state.contextMutable().clear();
+            state.contextMutable().addAll(loaded);
+            state.setSummary("");
+            agent.getDelegate().saveAgentState(userId, sessionId);
+            return CommandOutcome.stateChanged("History loaded: " + loaded.size() + " message(s) from " + file + ".");
+        } catch (Exception e) {
+            log.warn("History load failed: agent={}, session={}", agentId, sessionId, e);
+            return CommandOutcome.reply("History load failed: " + e.getMessage());
+        }
+    }
+
+    private String messageText(Msg message) {
+        return message.getContent().stream()
+                .filter(io.agentscope.core.message.TextBlock.class::isInstance)
+                .map(io.agentscope.core.message.TextBlock.class::cast)
+                .map(io.agentscope.core.message.TextBlock::getText)
+                .filter(text -> text != null && !text.isBlank())
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String history(String agentId, String userId, String channel, String sessionId) {
+        List<Map<String, Object>> messages = sessionLogReader.readFrontendMessages(agentId, userId, channel, sessionId);
+        return "Messages in current session: " + messages.size() + "\nUse /message <index> to inspect one message.";
+    }
+
+    private String message(String agentId, String userId, String channel, String sessionId, String args) {
+        List<Map<String, Object>> messages = sessionLogReader.readFrontendMessages(agentId, userId, channel, sessionId);
+        try {
+            int index = Integer.parseInt(args);
+            if (index < 1 || index > messages.size()) return "Message index must be between 1 and " + messages.size() + ".";
+            return JsonUtils.toJson(messages.get(index - 1));
+        } catch (NumberFormatException e) {
+            return "Usage: /message <index>";
+        }
+    }
+
+    private String systemPrompt(String agentId) {
+        var config = configManager.getConfig().getAgent(agentId);
+        if (config == null) return "Agent not found: " + agentId;
+        StringBuilder prompt = new StringBuilder();
+        for (String fileName : config.getSystemPromptFiles()) {
+            Path file = configManager.resolveWorkspaceDir(agentId).resolve(fileName);
+            try {
+                if (Files.isRegularFile(file)) prompt.append(Files.readString(file)).append("\n\n");
+            } catch (Exception ignored) {
+                // Continue with remaining prompt files.
+            }
+        }
+        return prompt.isEmpty() ? "No system prompt is configured." : prompt.toString().strip();
+    }
+
+    private String listSkills(String agentId, String channel) {
         List<String> lines = new ArrayList<>();
         for (Map<String, Object> skill : skillService.listSkills(agentId)) {
+            if (!Boolean.TRUE.equals(skill.get("enabled")) || !skillAvailableOnChannel(skill, channel)) continue;
             String enabled = Boolean.TRUE.equals(skill.get("enabled")) ? "enabled" : "disabled";
             String description = stringValue(skill.get("description"), "");
             lines.add("- " + stringValue(skill.get("name"), "") + " [" + enabled + "]" + (description.isBlank() ? "" : ": " + description));
         }
         return lines.isEmpty() ? "No workspace skills are installed." : String.join("\n", lines);
+    }
+
+    private String commandHelp() {
+        return "Available commands: /clear, /new, /compact, /compact_str, /history, /message, /dump_history, "
+                + "/load_history, /memorize, /dream, /system_prompt, /skills, /<skill> <input>, /stop, "
+                + "/approval, /approve, /deny, /model, /status, /restart, /reload-config, /version, /logs.";
+    }
+
+    private record CommandOutcome(String reply, String modelText, boolean stateChanged) {
+        static CommandOutcome pass() { return new CommandOutcome(null, null, false); }
+        static CommandOutcome reply(String text) { return new CommandOutcome(text, null, false); }
+        static CommandOutcome stateChanged(String text) { return new CommandOutcome(text, null, true); }
+        static CommandOutcome rewrite(String text) { return new CommandOutcome(null, text, false); }
     }
 
     private String readWorkspaceMarkdown(String agentId, String fileName, String fallback) {

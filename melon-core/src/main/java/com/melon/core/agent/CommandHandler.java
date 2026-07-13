@@ -170,31 +170,8 @@ public class CommandHandler {
                     "Listing skills", Map.of());
         }
 
-        String[] parts = args.split("\\s+", 2);
-        String subCmd = parts[0].toLowerCase();
-
-        return switch (subCmd) {
-            case "list" -> CommandResult.ok(CommandType.SKILLS, CommandResult.Action.LIST_SKILLS,
-                    "Listing skills", Map.of());
-            case "add" -> {
-                if (parts.length < 2 || parts[1].isBlank()) {
-                    yield CommandResult.error(CommandType.SKILLS, "Usage: /skills add <skill_name>");
-                }
-                yield CommandResult.ok(CommandType.SKILLS, CommandResult.Action.ADD_SKILL,
-                        "Add skill: " + parts[1],
-                        Map.of("skill", parts[1]));
-            }
-            case "remove", "rm" -> {
-                if (parts.length < 2 || parts[1].isBlank()) {
-                    yield CommandResult.error(CommandType.SKILLS, "Usage: /skills remove <skill_name>");
-                }
-                yield CommandResult.ok(CommandType.SKILLS, CommandResult.Action.REMOVE_SKILL,
-                        "Remove skill: " + parts[1],
-                        Map.of("skill", parts[1]));
-            }
-            default -> CommandResult.error(CommandType.SKILLS,
-                    "Unknown sub-command: " + subCmd + ". Use: list, add, remove");
-        };
+        return CommandResult.ok(CommandType.SKILLS, CommandResult.Action.LIST_SKILLS,
+                "Listing skills", Map.of());
     }
 
     /**

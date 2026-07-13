@@ -113,6 +113,38 @@ public final class ChatManagerSelfCheck {
             throw new AssertionError("scroll tool indexes were not populated: " + scroll);
         }
 
+        String imageData = "x".repeat(13000);
+        manager.saveSessionShadow("default", "console", "u1", "s4image", Map.of("context", List.of(
+                Map.of("id", "tool-image", "role", "TOOL", "content", List.of(
+                        Map.of("type", "tool_result", "id", "c-image", "name", "browser_use", "output", List.of(
+                                Map.of("type", "image", "source", Map.of("type", "base64", "media_type", "image/png", "data", imageData))
+                        ))
+                ))
+        )));
+        Map<String, Object> imageShadow = JsonUtils.loadAsMap(home.resolve("workspaces/default/sessions/console/u1_s4image.json"));
+        if (!imageShadow.toString().contains("image/png") || !imageShadow.toString().contains(imageData)) {
+            throw new AssertionError("media tool output should not be replaced by a text spill: " + imageShadow);
+        }
+
+        Path duplicateStateDir = home.resolve("state/default/s4duplicate");
+        Files.createDirectories(duplicateStateDir);
+        Files.writeString(duplicateStateDir.resolve("agent_state.json"), """
+                {"context":[
+                  {"id":"u-state","role":"USER","content":[{"type":"text","text":"question"}]},
+                  {"id":"a-state","role":"ASSISTANT","content":[{"type":"text","text":"answer"}]},
+                  {"id":"t-state","role":"TOOL","content":[{"type":"tool_result","id":"c1","name":"browser_use","output":[{"type":"text","text":"ok"}]}]}
+                ]}
+                """);
+        manager.saveSessionShadowFromStateStore("default", "console", "u1", "s4duplicate", List.of(
+                Map.of("id", "frontend-user", "role", "user", "content", List.of(Map.of("type", "text", "text", "question"))),
+                Map.of("id", "stream-answer", "role", "assistant", "content", List.of(Map.of("type", "text", "text", "answer"))),
+                Map.of("id", "stream-result", "role", "tool", "content", List.of(Map.of("type", "tool_result", "id", "c1", "name", "browser_use", "output", "ok")))
+        ));
+        Map<String, Object> duplicateShadow = JsonUtils.loadAsMap(home.resolve("workspaces/default/sessions/console/u1_s4duplicate.json"));
+        if (duplicateShadow.toString().contains("stream-answer") || duplicateShadow.toString().contains("stream-result")) {
+            throw new AssertionError("SSE output duplicated AgentScope state: " + duplicateShadow);
+        }
+
         Path compactState = home.resolve("state/default/s5");
         Files.createDirectories(compactState);
         Files.writeString(compactState.resolve("agent_state.json"), """

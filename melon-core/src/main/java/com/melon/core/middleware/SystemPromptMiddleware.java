@@ -22,6 +22,12 @@ public class SystemPromptMiddleware implements MiddlewareBase {
     private static final String HEARTBEAT_END = "<!-- heartbeat:end -->";
     private static final String MEMORY_START = "<!-- memory:start -->";
     private static final String MEMORY_END = "<!-- memory:end -->";
+    private static final String TOOL_EVIDENCE_GUIDANCE = """
+            ## Tool Evidence
+
+            When describing tool or browser activity in this session, state URLs, statuses, errors, and results
+            only when they appear in tool-result blocks. Do not invent failed sites, retries, captchas, or
+            successful fallbacks. If no matching result exists, say that it was not recorded.""";
 
     private final Path workspaceDir;
     private final List<String> promptFiles;
@@ -74,12 +80,11 @@ public class SystemPromptMiddleware implements MiddlewareBase {
             sb.append("\n\n").append(skillContext);
         }
 
-        // 3. 如果没有读到任何文件, 使用 AgentScope 已有内容
-        if (sb.isEmpty()) {
-            return Mono.just(currentPrompt);
-        }
-
-        return Mono.just(sb.toString());
+        // Apply the evidence rule even when the workspace has no prompt files.
+        String prompt = sb.isEmpty() ? currentPrompt : sb.toString();
+        if (prompt == null || prompt.isBlank()) return Mono.just(TOOL_EVIDENCE_GUIDANCE);
+        if (prompt.contains("## Tool Evidence")) return Mono.just(prompt);
+        return Mono.just(prompt.strip() + "\n\n" + TOOL_EVIDENCE_GUIDANCE);
     }
 
     private String processHeartbeatSection(String content) {

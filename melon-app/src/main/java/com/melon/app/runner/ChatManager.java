@@ -123,6 +123,15 @@ public class ChatManager {
         return SafePathUtil.resolveSafe(sessions, fileName);
     }
 
+    public boolean clearSessionShadow(String agentId, String channel, String userId, String sessionId) {
+        try {
+            return Files.deleteIfExists(sessionFile(agentId, channel, userId, sessionId));
+        } catch (IOException e) {
+            log.warn("Failed to clear session shadow: agent={}, session={}", agentId, sessionId, e);
+            return false;
+        }
+    }
+
     public void saveSessionShadow(String agentId, String channel, String userId, String sessionId, Map<String, Object> state) {
         if (state == null || state.isEmpty()) return;
         Map<String, Object> normalizedState = new LinkedHashMap<>(state);
@@ -150,13 +159,19 @@ public class ChatManager {
                                                 Map<String, Object> turnUsage) {
         Path stateFile = findStateFile(agentId, sessionId);
         Map<String, Object> state = stateFile != null ? JsonUtils.load(stateFile, MAP_TYPE) : null;
-        if (state == null || contextSize(state) == 0) {
+        boolean hasAgentScopeState = state != null && contextSize(state) > 0;
+        if (!hasAgentScopeState) {
             Map<String, Object> previous = previousShadowState(agentId, channel, userId, sessionId);
             state = previous.isEmpty() ? new LinkedHashMap<>() : previous;
         }
-        mergeFrontendContext(state, prependContext);
+        // AgentScope state is canonical. Only merge user blocks into it so the
+        // SSE-compatible output snapshot cannot persist a second copy of a turn.
+        List<Map<String, Object>> contextToMerge = hasAgentScopeState
+                ? userContext(prependContext)
+                : prependContext;
+        mergeFrontendContext(state, contextToMerge);
         injectTurnUsage(state, turnUsage);
-        state = repairCompactedStateFromLog(agentId, sessionId, state, prependContext, turnUsage);
+        state = repairCompactedStateFromLog(agentId, sessionId, state, contextToMerge, turnUsage);
         if (!state.isEmpty()) {
             saveSessionShadow(agentId, channel, userId, sessionId, state);
         }
@@ -605,6 +620,7 @@ public class ChatManager {
 
     private void maybeSpillLargeToolOutput(String agentId, Map<String, Object> block) {
         Object output = block.get("output");
+        if (containsMediaOutput(output)) return;
         String text = output instanceof String s ? s : JsonUtils.toJson(output);
         if (text == null || text.length() <= largeToolOutputChars(agentId)) return;
         try {
@@ -621,6 +637,16 @@ public class ChatManager {
         } catch (Exception e) {
             log.warn("Failed to spill large tool output for agent={}", agentId, e);
         }
+    }
+
+    private boolean containsMediaOutput(Object output) {
+        if (!(output instanceof List<?> blocks)) return false;
+        for (Object block : blocks) {
+            if (!(block instanceof Map<?, ?> raw)) continue;
+            String type = stringValue(raw.get("type"));
+            if ("image".equals(type) || "audio".equals(type) || "video".equals(type)) return true;
+        }
+        return false;
     }
 
     private int largeToolOutputChars(String agentId) {
@@ -693,6 +719,13 @@ public class ChatManager {
             }
         }
         state.put("context", context);
+    }
+
+    private List<Map<String, Object>> userContext(List<Map<String, Object>> context) {
+        if (context == null || context.isEmpty()) return List.of();
+        return context.stream()
+                .filter(item -> "user".equalsIgnoreCase(stringValue(item.get("role"))))
+                .toList();
     }
 
     @SuppressWarnings("unchecked")

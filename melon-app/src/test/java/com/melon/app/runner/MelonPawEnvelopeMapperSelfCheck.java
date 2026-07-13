@@ -13,7 +13,10 @@ import io.agentscope.core.event.ToolCallEndEvent;
 import io.agentscope.core.event.ToolCallStartEvent;
 import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.event.ToolResultStartEvent;
+import io.agentscope.core.event.ToolResultDataDeltaEvent;
 import io.agentscope.core.event.ToolResultTextDeltaEvent;
+import io.agentscope.core.message.Base64Source;
+import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.ToolResultState;
 import org.springframework.http.codec.ServerSentEvent;
 
@@ -110,6 +113,26 @@ public final class MelonPawEnvelopeMapperSelfCheck {
         }
         if (!String.valueOf(resultData.get("output")).contains("/tmp")) {
             throw new AssertionError("output text missing: " + resultData);
+        }
+
+        MelonPawEnvelopeMapper mediaMapper = new MelonPawEnvelopeMapper("s-media");
+        List<Map<String, Object>> mediaPayloads = new ArrayList<>();
+        collect(mediaPayloads, mediaMapper.start());
+        collect(mediaPayloads, mediaMapper.translate(new ToolCallStartEvent("r-media", "call-media", "browser_use")));
+        collect(mediaPayloads, mediaMapper.translate(new ToolCallEndEvent("r-media", "call-media", "browser_use")));
+        collect(mediaPayloads, mediaMapper.translate(new ToolResultStartEvent("r-media", "call-media", "browser_use")));
+        collect(mediaPayloads, mediaMapper.translate(new ToolResultDataDeltaEvent("r-media", "call-media", "browser_use",
+                ImageBlock.builder().source(Base64Source.builder().mediaType("image/png").data("AQI=").build()).build())));
+        collect(mediaPayloads, mediaMapper.translate(new ToolResultEndEvent("r-media", "call-media", "browser_use", ToolResultState.SUCCESS)));
+        collect(mediaPayloads, mediaMapper.finish());
+        Map<String, Object> mediaResult = mediaPayloads.stream()
+                .filter(p -> "message".equals(p.get("object")))
+                .filter(p -> "plugin_call_output".equals(p.get("type")))
+                .filter(p -> "completed".equals(p.get("status")))
+                .findFirst()
+                .orElseThrow();
+        if (!String.valueOf(data(mediaResult).get("output")).contains("\"type\":\"image\"")) {
+            throw new AssertionError("media tool result was not frontend-compatible: " + mediaResult);
         }
 
         MelonPawEnvelopeMapper officialToolMapper = new MelonPawEnvelopeMapper("s3");

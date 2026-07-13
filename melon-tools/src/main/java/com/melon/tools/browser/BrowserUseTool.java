@@ -2,11 +2,15 @@ package com.melon.tools.browser;
 
 import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
+import io.agentscope.core.message.Base64Source;
+import io.agentscope.core.message.ImageBlock;
+import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import reactor.core.publisher.Mono;
 
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -186,7 +190,12 @@ public class BrowserUseTool extends ToolBase {
             byte[] screenshotBytes = page.screenshot(new com.microsoft.playwright.Page.ScreenshotOptions()
                 .setFullPage(true));
             String base64 = Base64.getEncoder().encodeToString(screenshotBytes);
-            return ToolResultBlock.text("Screenshot captured (base64, " + screenshotBytes.length + " bytes):\n" + base64);
+            return ToolResultBlock.of(List.of(
+                    TextBlock.builder().text("Screenshot captured (" + screenshotBytes.length + " bytes PNG).").build(),
+                    ImageBlock.builder().source(Base64Source.builder()
+                            .mediaType("image/png")
+                            .data(base64)
+                            .build()).build()));
         } catch (Exception e) {
             return ToolResultBlock.error("Failed to take screenshot: " + e.getMessage());
         }
