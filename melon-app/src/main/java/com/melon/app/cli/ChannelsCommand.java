@@ -136,7 +136,9 @@ public class ChannelsCommand extends AbstractHttpCommand implements Callable<Int
         public Integer call() { return execute(CliCommandSpecs.CHANNELS_QRCODE_STATUS, Map.of("channel", channel), null, headers(agent)); }
     }
 
-    @Command(name = "access-control", mixinStandardHelpOptions = true)
+    @Command(name = "access-control", mixinStandardHelpOptions = true,
+            subcommands = {AccessControlWhitelist.class, AccessControlBlacklist.class,
+                    AccessControlPending.class, AccessControlRemark.class, AccessControlUsername.class})
     static class AccessControl extends AbstractHttpCommand implements Callable<Integer> {
         @Parameters(index = "0", paramLabel = "CHANNEL", arity = "0..1") String channel;
         @Option(names = "--agent") String agent;
@@ -145,6 +147,69 @@ public class ChannelsCommand extends AbstractHttpCommand implements Callable<Int
                     ? execute(CliCommandSpecs.CHANNELS_ACCESS_CONTROL, Map.of(), null, headers(agent))
                     : execute(CliCommandSpecs.CHANNELS_ACCESS_CONTROL_CHANNEL, Map.of("channel", channel), null, headers(agent));
         }
+    }
+
+    @Command(name = "whitelist", mixinStandardHelpOptions = true)
+    static class AccessControlWhitelist extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "CHANNEL") String channel;
+        @Option(names = "--add") String add;
+        @Option(names = "--remove") String remove;
+        @Option(names = "--agent") String agent;
+        public Integer call() {
+            if (add != null) return CliHttpSupport.request(commandSpec, "POST", "/api/access-control/" + CliHttpSupport.url(channel) + "/whitelist", Map.of("user_id", add), headers(agent));
+            if (remove != null) return CliHttpSupport.request(commandSpec, "DELETE", "/api/access-control/" + CliHttpSupport.url(channel) + "/whitelist/" + CliHttpSupport.url(remove), null, headers(agent));
+            return execute(CliCommandSpecs.CHANNELS_ACCESS_CONTROL_CHANNEL, Map.of("channel", channel), null, headers(agent));
+        }
+    }
+
+    @Command(name = "blacklist", mixinStandardHelpOptions = true)
+    static class AccessControlBlacklist extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "CHANNEL") String channel;
+        @Option(names = "--add") String add;
+        @Option(names = "--remove") String remove;
+        @Option(names = "--agent") String agent;
+        public Integer call() {
+            if (add != null) return CliHttpSupport.request(commandSpec, "POST", "/api/access-control/" + CliHttpSupport.url(channel) + "/blacklist", Map.of("user_id", add), headers(agent));
+            if (remove != null) return CliHttpSupport.request(commandSpec, "DELETE", "/api/access-control/" + CliHttpSupport.url(channel) + "/blacklist/" + CliHttpSupport.url(remove), null, headers(agent));
+            return execute(CliCommandSpecs.CHANNELS_ACCESS_CONTROL_CHANNEL, Map.of("channel", channel), null, headers(agent));
+        }
+    }
+
+    @Command(name = "pending", mixinStandardHelpOptions = true)
+    static class AccessControlPending extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "CHANNEL", arity = "0..1") String channel;
+        @Option(names = "--user-id") String userId;
+        @Option(names = "--approve") boolean approve;
+        @Option(names = "--deny") boolean deny;
+        @Option(names = "--agent") String agent;
+        public Integer call() {
+            if (approve || deny) {
+                if (channel == null || userId == null) {
+                    System.err.println("--channel and --user-id are required for approve/deny.");
+                    return 1;
+                }
+                String action = approve ? "approve" : "deny";
+                return CliHttpSupport.request(commandSpec, "POST", "/api/access-control/" + CliHttpSupport.url(channel)
+                        + "/pending/" + CliHttpSupport.url(userId) + "/" + action, Map.of(), headers(agent));
+            }
+            return CliHttpSupport.request(commandSpec, "GET", "/api/access-control/pending/all", null, headers(agent));
+        }
+    }
+
+    @Command(name = "remark", mixinStandardHelpOptions = true)
+    static class AccessControlRemark extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--user-id", required = true) String userId;
+        @Option(names = "--remark", required = true) String remark;
+        @Option(names = "--agent") String agent;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "POST", "/api/access-control/remark", Map.of("user_id", userId, "remark", remark), headers(agent)); }
+    }
+
+    @Command(name = "username", mixinStandardHelpOptions = true)
+    static class AccessControlUsername extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--user-id", required = true) String userId;
+        @Option(names = "--username", required = true) String username;
+        @Option(names = "--agent") String agent;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "POST", "/api/access-control/username", Map.of("user_id", userId, "username", username), headers(agent)); }
     }
 
     @Command(name = "send", description = "Send webhook payload to a channel", mixinStandardHelpOptions = true)

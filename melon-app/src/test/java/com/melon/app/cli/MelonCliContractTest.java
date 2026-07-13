@@ -21,7 +21,9 @@ class MelonCliContractTest {
                 "cron", "crons", "env", "envs", "chats", "chat",
                 "channels", "channel", "plugin", "doctor", "clean",
                 "shutdown", "task", "acp", "desktop", "auth",
-                "daemon", "update", "uninstall", "tui", "auto")) {
+                "daemon", "update", "uninstall", "tui", "auto",
+                "workspace", "project", "git", "mcp", "backup",
+                "security", "tools", "token-usage", "voice")) {
             assertTrue(commands.contains(command), "missing command: " + command);
         }
     }
@@ -68,6 +70,26 @@ class MelonCliContractTest {
     }
 
     @Test
+    void consoleBackedCommandsAreRegistered() {
+        CommandLine cli = new CommandLine(new MelonCli());
+        assertSubcommands(cli, "workspace", Set.of("info", "init", "config", "language", "files",
+                "memory", "code-files", "download", "upload", "system-prompt-files"));
+        assertSubcommands(cli, "project", Set.of("get", "set", "list", "create", "import-local",
+                "upload-zip", "browse-dirs", "clone"));
+        assertSubcommands(cli, "git", Set.of("status", "branches", "checkout", "diff", "stage",
+                "unstage", "commit", "log", "discard", "commit-diff", "revert"));
+        assertSubcommands(cli, "mcp", Set.of("list", "get", "create", "update", "toggle", "delete",
+                "tools", "set-tools", "policy", "set-policy", "oauth-start", "oauth-status",
+                "oauth-revoke", "reload", "call-tool"));
+        assertSubcommands(cli, "backup", Set.of("list", "get", "create", "restore", "delete", "export", "import"));
+        assertSubcommands(cli, "security", Set.of("tool-guard", "builtin-rules", "audit-events",
+                "file-guard", "skill-scanner", "blocked-history", "whitelist", "allow-no-auth-hosts"));
+        assertSubcommands(cli, "tools", Set.of("list", "toggle", "async", "config", "get-config"));
+        assertSubcommands(cli, "token-usage", Set.of("summary", "details"));
+        assertSubcommands(cli, "voice", Set.of("audio-mode", "provider", "provider-type", "local-whisper-status", "transcribe"));
+    }
+
+    @Test
     void secondBatchHelpParses() {
         CommandLine cli = new CommandLine(new MelonCli());
         cli.setOut(new java.io.PrintWriter(java.io.OutputStream.nullOutputStream()));
@@ -78,7 +100,16 @@ class MelonCliContractTest {
                 new String[]{"skills", "install", "--help"},
                 new String[]{"daemon", "logs", "--help"},
                 new String[]{"task", "--help"},
-                new String[]{"shutdown", "--help"})) {
+                new String[]{"shutdown", "--help"},
+                new String[]{"workspace", "--help"},
+                new String[]{"project", "--help"},
+                new String[]{"git", "--help"},
+                new String[]{"mcp", "--help"},
+                new String[]{"backup", "--help"},
+                new String[]{"security", "--help"},
+                new String[]{"tools", "--help"},
+                new String[]{"token-usage", "--help"},
+                new String[]{"voice", "--help"})) {
             assertEquals(0, cli.execute(args));
         }
     }

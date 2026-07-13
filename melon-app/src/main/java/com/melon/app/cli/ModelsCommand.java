@@ -21,12 +21,21 @@ import java.util.concurrent.Callable;
                 ModelsCommand.SetLlm.class,
                 ModelsCommand.TestProvider.class,
                 ModelsCommand.TestModel.class,
+                ModelsCommand.Discover.class,
+                ModelsCommand.ProbeMultimodal.class,
                 ModelsCommand.AddProvider.class,
                 ModelsCommand.RemoveProvider.class,
+                ModelsCommand.ProviderOAuthStart.class,
+                ModelsCommand.ProviderOAuthStatus.class,
                 ModelsCommand.CustomProviders.class,
+                ModelsCommand.OpenRouterSeries.class,
+                ModelsCommand.OpenRouterDiscover.class,
+                ModelsCommand.OpenRouterFilter.class,
                 ModelsCommand.AddModel.class,
                 ModelsCommand.ConfigModel.class,
                 ModelsCommand.RemoveModel.class,
+                ModelsCommand.LocalConfig.class,
+                ModelsCommand.LocalServer.class,
                 ModelsCommand.DownloadModel.class,
                 ModelsCommand.DownloadStatus.class,
                 ModelsCommand.CancelDownload.class,
@@ -107,6 +116,26 @@ public class ModelsCommand extends AbstractHttpCommand implements Callable<Integ
         }
     }
 
+    @Command(name = "discover", description = "Discover provider models", mixinStandardHelpOptions = true)
+    static class Discover extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "PROVIDER") String providerId;
+        @Option(names = "--set") List<String> fields;
+        public Integer call() {
+            return CliHttpSupport.request(commandSpec, "POST", "/api/models/" + CliHttpSupport.url(providerId) + "/discover",
+                    CliKeyValueParser.parsePairs(fields));
+        }
+    }
+
+    @Command(name = "probe-multimodal", description = "Probe model multimodal support", mixinStandardHelpOptions = true)
+    static class ProbeMultimodal extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "PROVIDER") String providerId;
+        @Parameters(index = "1", paramLabel = "MODEL") String modelId;
+        public Integer call() {
+            return CliHttpSupport.request(commandSpec, "POST", "/api/models/" + CliHttpSupport.url(providerId)
+                    + "/models/" + CliHttpSupport.url(modelId) + "/probe-multimodal", Map.of());
+        }
+    }
+
     @Command(name = "add-provider", description = "Create a custom provider", mixinStandardHelpOptions = true)
     static class AddProvider extends AbstractHttpCommand implements Callable<Integer> {
         @Parameters(index = "0", paramLabel = "PROVIDER") String providerId;
@@ -133,10 +162,39 @@ public class ModelsCommand extends AbstractHttpCommand implements Callable<Integ
         public Integer call() { return execute(CliCommandSpecs.MODELS_CUSTOM_PROVIDER_DELETE, Map.of("providerId", providerId), null); }
     }
 
+    @Command(name = "provider-oauth-start", description = "Start provider OAuth", mixinStandardHelpOptions = true)
+    static class ProviderOAuthStart extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "PROVIDER") String providerId;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "POST", "/api/providers/" + CliHttpSupport.url(providerId) + "/oauth/start", Map.of()); }
+    }
+
+    @Command(name = "provider-oauth-status", description = "Show provider OAuth status", mixinStandardHelpOptions = true)
+    static class ProviderOAuthStatus extends AbstractHttpCommand implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "PROVIDER") String providerId;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "GET", "/api/providers/" + CliHttpSupport.url(providerId) + "/oauth/status", null); }
+    }
+
     @Command(name = "custom-providers", description = "List custom providers", mixinStandardHelpOptions = true)
     static class CustomProviders extends AbstractHttpCommand implements Callable<Integer> {
         @Override
         public Integer call() { return execute(CliCommandSpecs.MODELS_CUSTOM_PROVIDERS_LIST); }
+    }
+
+    @Command(name = "openrouter-series", mixinStandardHelpOptions = true)
+    static class OpenRouterSeries extends AbstractHttpCommand implements Callable<Integer> {
+        public Integer call() { return CliHttpSupport.request(commandSpec, "GET", "/api/models/openrouter/series", null); }
+    }
+
+    @Command(name = "openrouter-discover", mixinStandardHelpOptions = true)
+    static class OpenRouterDiscover extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--set") List<String> fields;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "POST", "/api/models/openrouter/discover-extended", CliKeyValueParser.parsePairs(fields)); }
+    }
+
+    @Command(name = "openrouter-filter", mixinStandardHelpOptions = true)
+    static class OpenRouterFilter extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--set") List<String> fields;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "POST", "/api/models/openrouter/models/filter", CliKeyValueParser.parsePairs(fields)); }
     }
 
     @Command(name = "add-model", description = "Add a model to a provider", mixinStandardHelpOptions = true)
@@ -173,6 +231,28 @@ public class ModelsCommand extends AbstractHttpCommand implements Callable<Integ
         @Parameters(index = "1", paramLabel = "MODEL") String modelId;
         @Override
         public Integer call() { return execute(CliCommandSpecs.MODELS_REMOVE_MODEL, Map.of("providerId", providerId, "modelId", modelId), null); }
+    }
+
+    @Command(name = "local-config", description = "Get or update local model config", mixinStandardHelpOptions = true)
+    static class LocalConfig extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--set") List<String> fields;
+        public Integer call() {
+            return fields == null || fields.isEmpty()
+                    ? CliHttpSupport.request(commandSpec, "GET", "/api/local-models/config", null)
+                    : CliHttpSupport.request(commandSpec, "PUT", "/api/local-models/config", CliKeyValueParser.parsePairs(fields));
+        }
+    }
+
+    @Command(name = "local-server", description = "Manage local model server", mixinStandardHelpOptions = true)
+    static class LocalServer extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--start") boolean start;
+        @Option(names = "--stop") boolean stop;
+        @Option(names = "--set") List<String> fields;
+        public Integer call() {
+            if (stop) return CliHttpSupport.request(commandSpec, "DELETE", "/api/local-models/server", null);
+            if (start) return CliHttpSupport.request(commandSpec, "POST", "/api/local-models/server", CliKeyValueParser.parsePairs(fields));
+            return CliHttpSupport.request(commandSpec, "GET", "/api/local-models/server", null);
+        }
     }
 
     @Command(name = "download", description = "Download a local model through Ollama", mixinStandardHelpOptions = true)

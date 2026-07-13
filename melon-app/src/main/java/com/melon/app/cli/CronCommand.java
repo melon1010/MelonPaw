@@ -18,6 +18,8 @@ import java.util.concurrent.Callable;
             CronCommand.ListJobs.class,
             CronCommand.GetJob.class,
             CronCommand.StateJob.class,
+            CronCommand.HistoryJob.class,
+            CronCommand.DispatchTargets.class,
             CronCommand.CreateJob.class,
             CronCommand.UpdateJob.class,
             CronCommand.DeleteJob.class,
@@ -31,7 +33,7 @@ public class CronCommand implements Runnable {
     @Override
     public void run() {
         System.out.println("Usage: melonpaw cron <subcommand> [options]");
-        System.out.println("Subcommands: list, get, state, create, update, delete, pause, resume, run");
+        System.out.println("Subcommands: list, get, state, history, dispatch-targets, create, update, delete, pause, resume, run");
     }
 
     @Command(name = "list", description = "List all cron jobs", mixinStandardHelpOptions = true)
@@ -52,6 +54,17 @@ public class CronCommand implements Runnable {
         @Option(names = "--id", required = true) String id;
         @Override
         public Integer call() { return execute(CliCommandSpecs.CRON_STATE, Map.of("id", id), null); }
+    }
+
+    @Command(name = "history", description = "Get cron run history", mixinStandardHelpOptions = true)
+    static class HistoryJob extends AbstractHttpCommand implements Callable<Integer> {
+        @Option(names = "--id", required = true) String id;
+        public Integer call() { return CliHttpSupport.request(commandSpec, "GET", "/api/cron/jobs/" + CliHttpSupport.url(id) + "/history", null); }
+    }
+
+    @Command(name = "dispatch-targets", description = "List cron dispatch targets", mixinStandardHelpOptions = true)
+    static class DispatchTargets extends AbstractHttpCommand implements Callable<Integer> {
+        public Integer call() { return CliHttpSupport.request(commandSpec, "GET", "/api/cron/dispatch-targets", null); }
     }
 
     @Command(name = "create", description = "Create a cron job", mixinStandardHelpOptions = true)
