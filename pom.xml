@@ -76,7 +76,7 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <agentscope.version>2.0.0-RC3</agentscope.version>
+        <agentscope.version>2.0.0-RC5</agentscope.version>
         <picocli.version>4.7.6</picocli.version>
         <playwright.version>1.45.0</playwright.version>
         <lsp4j.version>0.23.0</lsp4j.version>
